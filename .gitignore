@@ -1,0 +1,42 @@
+# Unity-generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# IDE and editor user settings
+.vs/
+.vscode/
+.idea/
+.consulo/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.unityproj
+*.opendb
+*.VC.db
+*.VC.opendb
+
+# Unity generated files and crash reports
+ExportedObj/
+sysinfo.txt
+*.stacktrace
+crashlytics-build.properties
+
+# Package-manager and build caches
+.gradle/
+*.apk
+*.aab
+*.unitypackage
+
+# macOS Finder metadata
+.DS_Store
