@@ -2,7 +2,7 @@ using UnityEngine;
 
 /// <summary>
 /// Defines the usable loading area above the forklift tines. Parcels that
-/// fall into a discharge zone are snapped into a 2 x 3 x 6 stack when this
+/// fall into a discharge zone are snapped into a 2 x 3 x 5 stack when this
 /// area is directly above that zone.
 /// </summary>
 [DisallowMultipleComponent]
@@ -10,7 +10,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
 {
     private const int Rows = 2;
     private const int Columns = 3;
-    private const int Layers = 6;
+    private const int Layers = 5;
     private const int PackagesPerLayer = Rows * Columns;
 
     [Tooltip("Empty child centred over the fork tines. Loaded parcels become its children.")]
@@ -20,7 +20,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     [Min(0.01f)] public float captureWidth = 1.40f;
     [Min(0.01f)] public float captureLength = 1.50f;
 
-    [Header("2 rows x 3 parcels x 6 layers")]
+    [Header("2 rows x 3 fork positions x 5 layers")]
     [Min(0.01f)] public float rowSpacing = 0.64f;
     [Min(0.01f)] public float columnSpacing = 0.50f;
     [Min(0.01f)] public float layerSpacing = 0.38f;
@@ -83,8 +83,13 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     {
         var layer = slot / PackagesPerLayer;
         var layerSlot = slot % PackagesPerLayer;
-        var row = layerSlot / Columns;
-        var column = layerSlot % Columns;
+        // Fill each layer as pairs across both fork tines: first the middle
+        // position, then the position nearest the truck, and finally the tips.
+        // The forklift model's forks point along local -Z, so +Z is nearer the
+        // truck and -Z is the end of the forks.
+        var row = layerSlot % Rows;
+        var pair = layerSlot / Rows;
+        var column = pair == 0 ? 1 : pair == 1 ? 2 : 0;
 
         return new Vector3(
             (row - 0.5f) * rowSpacing,

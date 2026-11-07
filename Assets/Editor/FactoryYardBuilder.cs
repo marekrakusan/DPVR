@@ -12,6 +12,7 @@ public static class FactoryYardBuilder
 {
     private const string ConveyorAssetPath = "Assets/Objects/conveyor_unity.fbx";
     private const string ForkliftAssetPath = "Assets/Objects/forklift_unity.fbx";
+    private const string DeliveryTruckAssetPath = "Assets/Objects/DeliveryTruck.fbx";
     private const string ScenePath = "Assets/Scenes/FactoryYard.unity";
     private const string MaterialFolder = "Assets/FactoryYard/Materials";
     // The existing FBX uses centimetre file units, whereas this yard is laid out in metres.
@@ -50,6 +51,8 @@ public static class FactoryYardBuilder
         var hazard = GetMaterial("Safety_Yellow", new Color(0.97f, 0.65f, 0.05f), 0.35f, 0.1f);
         var cardboard = GetMaterial("Generated_Cardboard", new Color(0.56f, 0.31f, 0.10f), 0.72f, 0f);
         var tape = GetMaterial("Generated_Packing_Tape", new Color(0.96f, 0.80f, 0.45f), 0.46f, 0f);
+        EnsureOpaqueBuildingMaterial(hallYellow);
+        EnsureOpaqueBuildingMaterial(roofGray);
 
         var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
         var root = new GameObject("Factory_Yard");
@@ -64,10 +67,15 @@ public static class FactoryYardBuilder
         var rightConveyor = AddConveyor(conveyorAsset, "Conveyor_Right_Mirrored", conveyorRoot, RightConveyorOrigin, true);
         HideDemoPackages(leftConveyor);
         HideDemoPackages(rightConveyor);
+        EnsureConveyorCollision(leftConveyor);
+        EnsureConveyorCollision(rightConveyor);
 
         AddForklift(forkliftAsset, root.transform);
+        EnsureForkliftLoadCounter(root.transform, dark, frame);
         AddRuntimeBoxFlow(root.transform, boxes, cardboard, tape);
         AddLightingAndCamera(root.transform);
+        EnsureLevelIntroOverlay(root.transform);
+        AddDeliveryTruckWorkflow();
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.SaveScene(scene, ScenePath);
@@ -151,6 +159,356 @@ public static class FactoryYardBuilder
     }
 
     /// <summary>
+    /// Makes the existing halls physically solid without moving their current
+    /// layout. The forklift uses a CharacterController, so it will now stop
+    /// when it reaches the solid wall or roof colliders.
+    /// </summary>
+    [MenuItem("Factory/Make Buildings Solid")]
+    private static void MakeBuildingsSolid()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before making the buildings solid.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var environment = root != null ? root.transform.Find("Environment") : null;
+        if (environment == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        EnsureFolder("Assets/FactoryYard");
+        EnsureFolder(MaterialFolder);
+        var hallYellow = GetMaterial("Factory_Yellow", new Color(0.92f, 0.57f, 0.06f), 0.42f, 0.05f);
+        var roofGray = GetMaterial("Roof_Gray", new Color(0.20f, 0.23f, 0.27f), 0.6f, 0.2f);
+        var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
+        var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
+        var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
+
+        EnsureOpaqueBuildingMaterial(hallYellow);
+        EnsureOpaqueBuildingMaterial(roofGray);
+        AddBuildingDetails(environment, roofGray, dark, frame, skylight);
+        EnsureBuildingWallColliders(environment);
+
+        var controllerRoot = GameObject.Find("Forklift_Controller");
+        if (controllerRoot != null)
+        {
+            EnsureForkliftCollision(controllerRoot);
+        }
+
+        AssetDatabase.SaveAssets();
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = environment.gameObject;
+        Debug.Log("Buildings are opaque and solid; the forklift now collides with their walls and roofs.");
+    }
+
+    /// <summary>
+    /// Restores the north/main hall's original X width after the previous
+    /// expansion and doubles its depth along Z. The front façade stays in the
+    /// same place, so the truck gate and conveyor loading windows remain aligned.
+    /// </summary>
+    [MenuItem("Factory/Correct Main Hall: Restore X and Double Z")]
+    private static void CorrectMainHallDimensions()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before resizing the main hall.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var environment = root != null ? root.transform.Find("Environment") : null;
+        var mainHall = environment != null ? environment.Find("North_Main_Hall") : null;
+        var walls = mainHall != null ? mainHall.Find("Walls") : null;
+        if (root == null || environment == null || mainHall == null || walls == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        Undo.RecordObject(walls, "Correct Main Hall Dimensions");
+        var wallScale = walls.localScale;
+        walls.localScale = new Vector3(wallScale.x * 0.5f, wallScale.y, wallScale.z * 2f);
+        // Move the enlarged hall toward its rear so its existing front face,
+        // gate and two conveyor entry openings do not move into the courtyard.
+        walls.localPosition += new Vector3(0f, 0f, wallScale.z * 0.5f);
+
+        var concreteBase = mainHall.Find("Concrete_Base");
+        if (concreteBase != null)
+        {
+            Undo.RecordObject(concreteBase, "Correct Main Hall Base Dimensions");
+            var baseScale = concreteBase.localScale;
+            concreteBase.localScale = new Vector3(baseScale.x * 0.5f, baseScale.y, baseScale.z * 2f);
+            concreteBase.localPosition += new Vector3(0f, 0f, baseScale.z * 0.5f);
+        }
+
+        EnsureFolder("Assets/FactoryYard");
+        EnsureFolder(MaterialFolder);
+        var roofGray = GetMaterial("Roof_Gray", new Color(0.20f, 0.23f, 0.27f), 0.6f, 0.2f);
+        var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
+        var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
+        var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
+
+        // Regenerating all façade details also corrects the side skylight angle.
+        AddBuildingDetails(environment, roofGray, dark, frame, skylight);
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = mainHall.gameObject;
+        Debug.Log("The main hall X width was restored, its Z depth was doubled, and the fitted roof, windows and skylights were refreshed.");
+    }
+
+    /// <summary>
+    /// Adds collision volumes to the existing conveyors and a live display
+    /// above the truck gate showing the packages currently on the forklift.
+    /// </summary>
+    [MenuItem("Factory/Make Conveyors Solid and Add Load Counter")]
+    private static void MakeConveyorsSolidAndAddLoadCounter()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before updating the conveyors.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var conveyors = root != null ? root.transform.Find("Conveyors") : null;
+        if (root == null || conveyors == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        EnsureConveyorCollision(conveyors.Find("Conveyor_Left")?.gameObject);
+        EnsureConveyorCollision(conveyors.Find("Conveyor_Right_Mirrored")?.gameObject);
+
+        EnsureFolder("Assets/FactoryYard");
+        EnsureFolder(MaterialFolder);
+        var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
+        var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
+        EnsureForkliftLoadCounter(root.transform, dark, frame);
+
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = root;
+        Debug.Log("The conveyors are solid and the main-gate load counter is ready (0 / 30).");
+    }
+
+    [MenuItem("Factory/Add Delivery Truck Workflow")]
+    private static void AddDeliveryTruckWorkflow()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before adding the delivery truck.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(DeliveryTruckAssetPath);
+        var coordinator = root != null ? root.transform.Find("Runtime_Box_Flow")?.GetComponent<ConveyorDropCoordinator>() : null;
+        var forkliftLoad = GameObject.Find("Forklift_Controller")?.GetComponent<ForkliftLoadArea>();
+        var gate = root != null ? root.transform.Find("Environment/Main_Truck_Gate") : null;
+        if (root == null || prefab == null || coordinator == null || forkliftLoad == null || gate == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open FactoryYard after importing DeliveryTruck.fbx and creating the parcel flow.", "OK");
+            return;
+        }
+
+        var hallYellow = GetMaterial("Factory_Yellow", new Color(0.92f, 0.57f, 0.06f), 0.42f, 0.05f);
+        EnsureMainGateOpening(root.transform, hallYellow);
+
+        var truck = GameObject.Find("Delivery_Truck_Controller");
+        if (truck == null)
+        {
+            truck = new GameObject("Delivery_Truck_Controller");
+            truck.transform.SetParent(root.transform, false);
+        }
+
+        // Replace the visual whenever this command runs. It keeps the current
+        // scene aligned with the most recently exported Blender truck (for
+        // example the DPVR lettering) without touching its route/controller.
+        var oldVisual = truck.transform.Find("Delivery_Truck_Visual");
+        if (oldVisual != null) Undo.DestroyObjectImmediate(oldVisual.gameObject);
+        var visual = (GameObject)PrefabUtility.InstantiatePrefab(prefab, truck.transform);
+        visual.name = "Delivery_Truck_Visual";
+        visual.transform.localPosition = Vector3.zero;
+        visual.transform.localRotation = Quaternion.identity;
+        visual.transform.localScale = Vector3.one;
+
+        // The truck starts completely outside the rear of the north hall,
+        // points into the courtyard and stops under the opening at the end of
+        // every parcel round.  Z=23 put the rear of the earlier 6.65 m model
+        // inside the hall, where it could be hidden by the building.
+        const float truckStartZ = 25.5f;
+        truck.transform.position = new Vector3(0f, 0f, truckStartZ);
+        truck.transform.rotation = Quaternion.identity;
+
+        var cargo = truck.transform.Find("Truck_Cargo_Anchor");
+        if (cargo == null)
+        {
+            cargo = new GameObject("Truck_Cargo_Anchor").transform;
+            cargo.SetParent(truck.transform, false);
+        }
+        cargo.localPosition = new Vector3(0f, 1.18f, 1.15f);
+        cargo.localRotation = Quaternion.identity;
+
+        var controller = truck.GetComponent<DeliveryTruckController>();
+        if (controller == null) controller = Undo.AddComponent<DeliveryTruckController>(truck);
+        controller.coordinator = coordinator;
+        controller.forkliftLoad = forkliftLoad;
+        controller.truckVisual = truck.transform.Find("Delivery_Truck_Visual");
+        if (controller.truckVisual != null)
+        {
+            // The Blender FBX can carry centimetre units even when its scene
+            // is authored in metres.  Normalize the imported visual to its
+            // intended road-going footprint so it is plainly visible in this
+            // yard and fits through the 6.35 m gate.
+            NormalizeTruckVisualDimensions(controller.truckVisual);
+            if (TryGetVisualBounds(controller.truckVisual, out var bounds) &&
+                Mathf.Abs(bounds.min.y) > 0.005f)
+            {
+                controller.truckVisual.localPosition += Vector3.up * -bounds.min.y;
+            }
+
+            // The Blender truck may be refined without changing this builder.
+            // Fit its collider after it has been placed on the concrete rather
+            // than relying on obsolete hard-coded vehicle dimensions.
+            FitTruckColliderToVisual(truck, controller.truckVisual);
+        }
+        controller.cargoAnchor = cargo;
+        controller.cargoCover = FindDescendant(controller.truckVisual, "Cargo_Tarp")?.gameObject;
+        controller.gate = gate;
+        controller.approachZ = 9.5f;
+        controller.exitZ = truckStartZ;
+
+        EnsureLevelIntroOverlay(root.transform);
+
+        EditorUtility.SetDirty(controller);
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = truck;
+        Debug.Log("Added delivery truck: it opens the gate only after parcel 30 reaches a landing zone, waits for the forklift, then leaves with its load.");
+    }
+
+    private static void NormalizeTruckVisualDimensions(Transform visual)
+    {
+        if (!TryGetVisualBounds(visual, out var sourceBounds))
+        {
+            return;
+        }
+
+        // Dimensions in the Unity yard: conventional 2.5 m wide, 3.0 m tall
+        // and 6.25 m long.  The model points along Z and therefore still has
+        // clearance at the 6.35 m-wide gate.
+        var targetSize = new Vector3(2.50f, 3.00f, 6.25f);
+        var sourceSize = sourceBounds.size;
+        visual.localScale = new Vector3(
+            targetSize.x / Mathf.Max(0.001f, sourceSize.x),
+            targetSize.y / Mathf.Max(0.001f, sourceSize.y),
+            targetSize.z / Mathf.Max(0.001f, sourceSize.z));
+    }
+
+    private static bool TryGetVisualBounds(Transform visual, out Bounds bounds)
+    {
+        bounds = new Bounds();
+        if (visual == null)
+        {
+            return false;
+        }
+
+        var hasBounds = false;
+        foreach (var renderer in visual.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer.enabled)
+            {
+                continue;
+            }
+
+            if (hasBounds)
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+            else
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+        }
+
+        return hasBounds;
+    }
+
+    /// <summary>
+    /// Makes the controller's collision volume follow the imported truck.
+    /// The source model is intentionally kept in Blender, therefore this
+    /// avoids coupling the Unity route to a particular mesh size.
+    /// </summary>
+    private static void FitTruckColliderToVisual(GameObject truck, Transform visual)
+    {
+        if (truck == null || visual == null)
+        {
+            return;
+        }
+
+        if (!TryGetVisualBounds(visual, out var bounds))
+        {
+            return;
+        }
+
+        var collider = truck.GetComponent<BoxCollider>();
+        if (collider == null)
+        {
+            collider = Undo.AddComponent<BoxCollider>(truck);
+        }
+
+        collider.center = truck.transform.InverseTransformPoint(bounds.center);
+        collider.size = new Vector3(
+            bounds.size.x + 0.08f,
+            bounds.size.y + 0.06f,
+            bounds.size.z + 0.08f);
+        collider.isTrigger = false;
+    }
+
+    private static void EnsureMainGateOpening(Transform root, Material wallMaterial)
+    {
+        var environment = root.Find("Environment");
+        var walls = environment != null ? environment.Find("North_Main_Hall/Walls") : null;
+        var wallRenderer = walls != null ? walls.GetComponent<Renderer>() : null;
+        if (walls == null || wallRenderer == null)
+        {
+            return;
+        }
+
+        var bounds = wallRenderer.bounds;
+        wallRenderer.enabled = false;
+        var oldWallCollider = walls.GetComponent<Collider>();
+        if (oldWallCollider != null) oldWallCollider.enabled = false;
+
+        var previous = environment.Find("Main_Hall_Gate_Opening");
+        if (previous != null) Object.DestroyImmediate(previous.gameObject);
+        var opening = new GameObject("Main_Hall_Gate_Opening").transform;
+        opening.SetParent(environment, false);
+
+        const float openingWidth = 6.35f;
+        const float openingHeight = 6.45f;
+        const float frontDepth = 0.36f;
+        var sideWidth = (bounds.size.x - openingWidth) * 0.5f;
+        var frontZ = bounds.min.z + frontDepth * 0.5f - 0.05f;
+        CreateCube("Gate_Wall_Left", opening,
+            new Vector3(bounds.center.x - openingWidth * 0.5f - sideWidth * 0.5f, bounds.center.y, bounds.center.z),
+            new Vector3(sideWidth, bounds.size.y, bounds.size.z), wallMaterial);
+        CreateCube("Gate_Wall_Right", opening,
+            new Vector3(bounds.center.x + openingWidth * 0.5f + sideWidth * 0.5f, bounds.center.y, bounds.center.z),
+            new Vector3(sideWidth, bounds.size.y, bounds.size.z), wallMaterial);
+        CreateCube("Gate_Wall_Above", opening,
+            new Vector3(bounds.center.x, bounds.max.y - (bounds.size.y - openingHeight) * 0.5f, frontZ),
+            new Vector3(openingWidth, bounds.size.y - openingHeight, frontDepth), wallMaterial);
+    }
+
+    /// <summary>
     /// Refreshes only the runtime parcel paths in the open factory scene.
     /// It deliberately leaves the halls, forklift and conveyor placement intact.
     /// </summary>
@@ -199,6 +557,7 @@ public static class FactoryYardBuilder
         var tape = GetMaterial("Generated_Packing_Tape", new Color(0.96f, 0.80f, 0.45f), 0.46f, 0f);
         AddRuntimeBoxFlow(root.transform, boxes, cardboard, tape);
         EnsureCameraZoom(root.transform);
+        RebindDeliveryTruckCoordinator(root.transform);
 
         EditorSceneManager.MarkSceneDirty(root.scene);
         EditorSceneManager.SaveScene(root.scene);
@@ -240,6 +599,7 @@ public static class FactoryYardBuilder
         coordinator.minimumDelayBetweenFalls = 3.5f;
         coordinator.maximumDelayBetweenFalls = 7f;
         coordinator.minimumDispatchGap = 0.55f;
+        coordinator.maximumPackagesPerRound = 30;
         var zoom = EnsureCameraZoom(root.transform);
 
         EditorUtility.SetDirty(coordinator);
@@ -321,6 +681,7 @@ public static class FactoryYardBuilder
             controller = Undo.AddComponent<ForkliftController>(controllerRoot);
         }
 
+        EnsureForkliftCollision(controllerRoot);
         EnsureForkliftLoadArea(controllerRoot);
 
         EditorUtility.SetDirty(controller);
@@ -331,7 +692,7 @@ public static class FactoryYardBuilder
     }
 
     /// <summary>
-    /// Adds the 36-package loading area to the current forklift without
+    /// Adds the 30-package loading area to the current forklift without
     /// changing its placement, its model or the conveyor layout.
     /// </summary>
     [MenuItem("Factory/Enable Forklift Package Loading")]
@@ -357,7 +718,7 @@ public static class FactoryYardBuilder
         EditorSceneManager.MarkSceneDirty(controllerRoot.scene);
         EditorSceneManager.SaveScene(controllerRoot.scene);
         Selection.activeGameObject = controllerRoot;
-        Debug.Log("Forklift package loading enabled: 36 parcels, arranged 2 x 3 x 6.");
+        Debug.Log("Forklift package loading enabled: 30 parcels, arranged 2 x 3 x 5.");
     }
 
     private static void BuildEnvironment(
@@ -418,6 +779,37 @@ public static class FactoryYardBuilder
         UpgradeHallExterior(environment.Find("North_Main_Hall"), roof, window, frame, skylight);
         UpgradeHallExterior(environment.Find("West_Hall"), roof, window, frame, skylight);
         UpgradeHallExterior(environment.Find("East_Hall"), roof, window, frame, skylight);
+    }
+
+    private static void EnsureBuildingWallColliders(Transform environment)
+    {
+        foreach (var hallName in new[] { "North_Main_Hall", "West_Hall", "East_Hall" })
+        {
+            var walls = environment.Find($"{hallName}/Walls");
+            if (walls == null)
+            {
+                continue;
+            }
+
+            // The main hall's original single cube would seal the doorway.
+            // Once the gate opening exists, its left/right/top replacement
+            // segments already carry their own solid colliders.
+            if (hallName == "North_Main_Hall" && environment.Find("Main_Hall_Gate_Opening") != null)
+            {
+                var originalGateWallCollider = walls.GetComponent<BoxCollider>();
+                if (originalGateWallCollider != null) originalGateWallCollider.enabled = false;
+                continue;
+            }
+
+            var wallCollider = walls.GetComponent<BoxCollider>();
+            if (wallCollider == null)
+            {
+                wallCollider = Undo.AddComponent<BoxCollider>(walls.gameObject);
+            }
+
+            wallCollider.enabled = true;
+            wallCollider.isTrigger = false;
+        }
     }
 
     private static void UpgradeHallExterior(Transform hall, Material roof, Material window, Material frame, Material skylight)
@@ -512,17 +904,26 @@ public static class FactoryYardBuilder
         mesh.RecalculateBounds();
         roof.AddComponent<MeshFilter>().sharedMesh = mesh;
         roof.AddComponent<MeshRenderer>().sharedMaterial = material;
+        var roofCollider = roof.AddComponent<MeshCollider>();
+        roofCollider.sharedMesh = mesh;
+        roofCollider.convex = false;
     }
 
     private static void AddFrontWindows(Transform parent, Vector3 centre, Vector3 size, Material window, Material frame)
     {
         var z = centre.z - size.z * 0.5f - 0.055f;
-        var panelWidth = Mathf.Min(5.0f, size.x * 0.105f);
+        // Keep the two windows on each side clear of the adjacent halls and
+        // distribute them around the central truck gate instead of clustering
+        // the inner pair close to the centre.
+        var panelWidth = Mathf.Min(3.15f, size.x * 0.085f);
         var panelHeight = Mathf.Min(1.2f, size.y * 0.135f);
         var windowY = centre.y + size.y * 0.14f;
-        foreach (var xFactor in new[] { -0.375f, -0.145f, 0.145f, 0.375f })
+        foreach (var xFactor in new[] { -0.315f, -0.205f, 0.205f, 0.315f })
         {
-            AddWindow("Front_Window", parent, new Vector3(centre.x + size.x * xFactor, windowY, z), new Vector3(panelWidth, panelHeight, 0.10f), window, frame, false);
+            // The main-hall front windows have four even panes: their third
+            // vertical mullion is an extra divider requested for the central
+            // building, while the side-hall windows keep their existing form.
+            AddWindow("Front_Window", parent, new Vector3(centre.x + size.x * xFactor, windowY, z), new Vector3(panelWidth, panelHeight, 0.10f), window, frame, false, 3);
         }
     }
 
@@ -541,7 +942,7 @@ public static class FactoryYardBuilder
         }
     }
 
-    private static void AddWindow(string name, Transform parent, Vector3 centre, Vector3 panelSize, Material window, Material frame, bool alongZ)
+    private static void AddWindow(string name, Transform parent, Vector3 centre, Vector3 panelSize, Material window, Material frame, bool alongZ, int verticalMullionCount = 2)
     {
         var root = new GameObject(name).transform;
         root.SetParent(parent);
@@ -551,18 +952,28 @@ public static class FactoryYardBuilder
         {
             CreateCube("Frame_Top", root, centre + new Vector3(0f, panelSize.y * 0.5f, 0f), new Vector3(depth, 0.11f, panelSize.z + 0.16f), frame);
             CreateCube("Frame_Bottom", root, centre - new Vector3(0f, panelSize.y * 0.5f, 0f), new Vector3(depth, 0.11f, panelSize.z + 0.16f), frame);
-            for (var offset = -1; offset <= 1; offset++)
+            CreateCube("Frame_Left", root, centre - new Vector3(0f, 0f, panelSize.z * 0.5f), new Vector3(depth, panelSize.y + 0.14f, 0.10f), frame);
+            CreateCube("Frame_Right", root, centre + new Vector3(0f, 0f, panelSize.z * 0.5f), new Vector3(depth, panelSize.y + 0.14f, 0.10f), frame);
+            for (var index = 1; index <= verticalMullionCount; index++)
             {
-                CreateCube("Mullion", root, centre + new Vector3(0f, 0f, offset * panelSize.z / 3f), new Vector3(depth, panelSize.y + 0.14f, 0.075f), frame);
+                var offset = verticalMullionCount == 2
+                    ? (index == 1 ? -1f / 3f : 1f / 3f)
+                    : index / (float)(verticalMullionCount + 1) - 0.5f;
+                CreateCube("Mullion", root, centre + new Vector3(0f, 0f, offset * panelSize.z), new Vector3(depth, panelSize.y + 0.14f, 0.075f), frame);
             }
         }
         else
         {
             CreateCube("Frame_Top", root, centre + new Vector3(0f, panelSize.y * 0.5f, 0f), new Vector3(panelSize.x + 0.16f, 0.11f, depth), frame);
             CreateCube("Frame_Bottom", root, centre - new Vector3(0f, panelSize.y * 0.5f, 0f), new Vector3(panelSize.x + 0.16f, 0.11f, depth), frame);
-            for (var offset = -1; offset <= 1; offset++)
+            CreateCube("Frame_Left", root, centre - new Vector3(panelSize.x * 0.5f, 0f, 0f), new Vector3(0.10f, panelSize.y + 0.14f, depth), frame);
+            CreateCube("Frame_Right", root, centre + new Vector3(panelSize.x * 0.5f, 0f, 0f), new Vector3(0.10f, panelSize.y + 0.14f, depth), frame);
+            for (var index = 1; index <= verticalMullionCount; index++)
             {
-                CreateCube("Mullion", root, centre + new Vector3(offset * panelSize.x / 3f, 0f, 0f), new Vector3(0.075f, panelSize.y + 0.14f, depth), frame);
+                var offset = verticalMullionCount == 2
+                    ? (index == 1 ? -1f / 3f : 1f / 3f)
+                    : index / (float)(verticalMullionCount + 1) - 0.5f;
+                CreateCube("Mullion", root, centre + new Vector3(offset * panelSize.x, 0f, 0f), new Vector3(0.075f, panelSize.y + 0.14f, depth), frame);
             }
         }
     }
@@ -588,7 +999,9 @@ public static class FactoryYardBuilder
         var xOffset = inwardSide * halfX * 0.355f;
         var roofY = wallBounds.max.y + 0.03f + roofRise * (1f - Mathf.Abs(xOffset) / halfX) + 0.08f;
         var slopeAngle = Mathf.Atan2(roofRise, halfX) * Mathf.Rad2Deg;
-        var rotation = Quaternion.Euler(0f, 0f, inwardSide > 0f ? slopeAngle : -slopeAngle);
+        // The roof slopes down away from its central ridge.  The old sign here
+        // pointed the side skylights into the roof instead of normal to it.
+        var rotation = Quaternion.Euler(0f, 0f, inwardSide > 0f ? -slopeAngle : slopeAngle);
         var lensSize = new Vector3(Mathf.Min(1.05f, wallBounds.size.x * 0.21f), 0.10f, Mathf.Min(2.0f, wallBounds.size.z * 0.067f));
         foreach (var zFactor in new[] { -0.367f, -0.133f, 0.133f, 0.367f })
         {
@@ -675,6 +1088,7 @@ public static class FactoryYardBuilder
         forklift.transform.localRotation = Quaternion.Euler(270f, 180f, 0f);
         forklift.transform.localScale = Vector3.one * 50f;
         controllerRoot.AddComponent<ForkliftController>();
+        EnsureForkliftCollision(controllerRoot);
         EnsureForkliftLoadArea(controllerRoot);
     }
 
@@ -694,6 +1108,62 @@ public static class FactoryYardBuilder
         controllerRoot.transform.localScale = Vector3.one;
         forklift.transform.SetParent(controllerRoot.transform, true);
         return controllerRoot;
+    }
+
+    private static void EnsureForkliftCollision(GameObject controllerRoot)
+    {
+        var collisionController = controllerRoot.GetComponent<CharacterController>();
+        if (collisionController == null)
+        {
+            collisionController = Undo.AddComponent<CharacterController>(controllerRoot);
+        }
+
+        var visualModel = controllerRoot.transform.Find("Forklift_Courtyard_Centre");
+        var renderers = visualModel != null
+            ? visualModel.GetComponentsInChildren<Renderer>(true)
+            : controllerRoot.GetComponentsInChildren<Renderer>(true);
+
+        var hasBounds = false;
+        var modelBounds = new Bounds();
+        foreach (var renderer in renderers)
+        {
+            if (!renderer.enabled)
+            {
+                continue;
+            }
+
+            if (hasBounds)
+            {
+                modelBounds.Encapsulate(renderer.bounds);
+            }
+            else
+            {
+                modelBounds = renderer.bounds;
+                hasBounds = true;
+            }
+        }
+
+        if (hasBounds)
+        {
+            var localCentre = controllerRoot.transform.InverseTransformPoint(modelBounds.center);
+            var footprint = Mathf.Min(modelBounds.size.x, modelBounds.size.z);
+            collisionController.radius = Mathf.Clamp(footprint * 0.34f, 0.42f, 0.70f);
+            collisionController.height = Mathf.Max(
+                collisionController.radius * 2f + 0.02f,
+                Mathf.Clamp(modelBounds.size.y * 0.90f, 1.60f, 2.60f));
+            collisionController.center = localCentre;
+        }
+        else
+        {
+            collisionController.radius = 0.55f;
+            collisionController.height = 2.0f;
+            collisionController.center = new Vector3(0f, 1.0f, 0f);
+        }
+
+        collisionController.skinWidth = 0.04f;
+        collisionController.stepOffset = Mathf.Min(0.25f, collisionController.height * 0.20f);
+        collisionController.slopeLimit = 45f;
+        collisionController.detectCollisions = true;
     }
 
     private static ForkliftLoadArea EnsureForkliftLoadArea(GameObject controllerRoot)
@@ -727,6 +1197,7 @@ public static class FactoryYardBuilder
         dropCoordinator.minimumDelayBetweenFalls = 3.5f;
         dropCoordinator.maximumDelayBetweenFalls = 7f;
         dropCoordinator.minimumDispatchGap = 0.55f;
+        dropCoordinator.maximumPackagesPerRound = 30;
         var boxPrefab = CreateBoxPrefab(runtime, cardboard, tape);
 
         var leftDiverter = ConfigureDiverter(root.Find("Conveyors/Conveyor_Left"));
@@ -805,6 +1276,40 @@ public static class FactoryYardBuilder
 
         dropCoordinator.leftSpawner = leftSpawner;
         dropCoordinator.rightSpawner = rightSpawner;
+        RebindDeliveryTruckCoordinator(root);
+    }
+
+    private static void RebindDeliveryTruckCoordinator(Transform root)
+    {
+        var truck = root != null ? root.Find("Delivery_Truck_Controller") : null;
+        var coordinator = root != null ? root.Find("Runtime_Box_Flow")?.GetComponent<ConveyorDropCoordinator>() : null;
+        var controller = truck != null ? truck.GetComponent<DeliveryTruckController>() : null;
+        if (controller == null || coordinator == null)
+        {
+            return;
+        }
+
+        controller.coordinator = coordinator;
+        EditorUtility.SetDirty(controller);
+    }
+
+    private static void EnsureLevelIntroOverlay(Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        var intro = root.GetComponent<LevelIntroOverlay>();
+        if (intro == null)
+        {
+            intro = Undo.AddComponent<LevelIntroOverlay>(root.gameObject);
+        }
+
+        intro.duration = 3f;
+        intro.levelLabel = "Level 1";
+        intro.objectiveLabel = "25/30\nto pass";
+        EditorUtility.SetDirty(intro);
     }
 
     private static ConveyorDiverter ConfigureDiverter(Transform conveyor)
@@ -829,6 +1334,148 @@ public static class FactoryYardBuilder
         diverter.branchBLocalZ = 29f;
         diverter.rotationSpeedDegrees = 360f;
         return diverter;
+    }
+
+    private static void EnsureConveyorCollision(GameObject conveyor)
+    {
+        if (conveyor == null || conveyor.transform.parent == null)
+        {
+            return;
+        }
+
+        var renderers = conveyor.GetComponentsInChildren<Renderer>(true);
+        var hasBounds = false;
+        var conveyorBounds = new Bounds();
+        foreach (var renderer in renderers)
+        {
+            if (!renderer.enabled)
+            {
+                continue;
+            }
+
+            if (hasBounds)
+            {
+                conveyorBounds.Encapsulate(renderer.bounds);
+            }
+            else
+            {
+                conveyorBounds = renderer.bounds;
+                hasBounds = true;
+            }
+        }
+
+        if (!hasBounds)
+        {
+            return;
+        }
+
+        var collisionName = $"{conveyor.name}_Solid_Collider";
+        var collisionRoot = conveyor.transform.parent.Find(collisionName);
+        if (collisionRoot == null)
+        {
+            collisionRoot = new GameObject(collisionName).transform;
+            collisionRoot.SetParent(conveyor.transform.parent, true);
+        }
+
+        collisionRoot.position = conveyorBounds.center;
+        collisionRoot.rotation = Quaternion.identity;
+        collisionRoot.localScale = Vector3.one;
+        var boxCollider = collisionRoot.GetComponent<BoxCollider>();
+        if (boxCollider == null)
+        {
+            boxCollider = collisionRoot.gameObject.AddComponent<BoxCollider>();
+        }
+
+        boxCollider.center = Vector3.zero;
+        boxCollider.size = new Vector3(
+            conveyorBounds.size.x + 0.08f,
+            conveyorBounds.size.y + 0.08f,
+            conveyorBounds.size.z + 0.08f);
+        boxCollider.isTrigger = false;
+    }
+
+    private static void EnsureForkliftLoadCounter(Transform root, Material dark, Material frame)
+    {
+        var environment = root.Find("Environment");
+        if (environment == null)
+        {
+            return;
+        }
+
+        var counterRoot = environment.Find("Forklift_Load_Counter");
+        if (counterRoot == null)
+        {
+            counterRoot = new GameObject("Forklift_Load_Counter").transform;
+            counterRoot.SetParent(environment, false);
+        }
+
+        // Position the board directly above the centre truck gate, on the
+        // courtyard face of the north hall.
+        var wallRenderer = environment.Find("North_Main_Hall/Walls")?.GetComponent<Renderer>();
+        var facadeZ = wallRenderer != null ? wallRenderer.bounds.min.z - 0.16f : 14.78f;
+        counterRoot.position = new Vector3(0f, 7.55f, facadeZ);
+        counterRoot.rotation = Quaternion.identity;
+
+        const float boardWidth = 3.1f;
+        const float boardHeight = 1.30f;
+        EnsureCounterBoardPiece(counterRoot, "Panel", Vector3.zero, new Vector3(boardWidth, boardHeight, 0.14f), dark);
+        var trimDepth = 0.18f;
+        var trimZ = -0.12f;
+        EnsureCounterBoardPiece(counterRoot, "Frame_Top", new Vector3(0f, boardHeight * 0.5f, trimZ), new Vector3(boardWidth + 0.16f, 0.10f, trimDepth), frame);
+        EnsureCounterBoardPiece(counterRoot, "Frame_Bottom", new Vector3(0f, -boardHeight * 0.5f, trimZ), new Vector3(boardWidth + 0.16f, 0.10f, trimDepth), frame);
+        EnsureCounterBoardPiece(counterRoot, "Frame_Left", new Vector3(-boardWidth * 0.5f, 0f, trimZ), new Vector3(0.10f, boardHeight + 0.16f, trimDepth), frame);
+        EnsureCounterBoardPiece(counterRoot, "Frame_Right", new Vector3(boardWidth * 0.5f, 0f, trimZ), new Vector3(0.10f, boardHeight + 0.16f, trimDepth), frame);
+
+        var textTransform = counterRoot.Find("Text");
+        if (textTransform == null)
+        {
+            textTransform = new GameObject("Text").transform;
+            textTransform.SetParent(counterRoot, false);
+        }
+
+        textTransform.localPosition = new Vector3(0f, 0f, -0.16f);
+        textTransform.localRotation = Quaternion.identity;
+        var textMesh = textTransform.GetComponent<TextMesh>();
+        if (textMesh == null)
+        {
+            textMesh = textTransform.gameObject.AddComponent<TextMesh>();
+        }
+
+        textMesh.text = "00";
+        textMesh.anchor = TextAnchor.MiddleCenter;
+        textMesh.alignment = TextAlignment.Center;
+        textMesh.characterSize = 0.20f;
+        textMesh.fontSize = 84;
+        // Dark red resembles a classic hockey score display without looking
+        // like an orange warning label.
+        textMesh.color = new Color(0.62f, 0.018f, 0.008f);
+        textMesh.fontStyle = FontStyle.Bold;
+
+        var counter = textTransform.GetComponent<ForkliftLoadCounter>();
+        if (counter == null)
+        {
+            counter = textTransform.gameObject.AddComponent<ForkliftLoadCounter>();
+        }
+
+        counter.counterText = textMesh;
+    }
+
+    private static void EnsureCounterBoardPiece(Transform parent, string name, Vector3 localPosition, Vector3 size, Material material)
+    {
+        var piece = parent.Find(name);
+        if (piece == null)
+        {
+            piece = CreateCube(name, parent, parent.TransformPoint(localPosition), size, material).transform;
+        }
+
+        piece.localPosition = localPosition;
+        piece.localRotation = Quaternion.identity;
+        piece.localScale = size;
+        var renderer = piece.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = material;
+        }
     }
 
     private static Transform FindDescendant(Transform parent, string name)
@@ -931,6 +1578,11 @@ public static class FactoryYardBuilder
         {
             return null;
         }
+
+        // The truck is spawned behind the north hall and then crosses the
+        // doorway. Keeping occlusion culling off avoids an out-of-date baked
+        // hall occluder hiding this dynamic vehicle during its approach.
+        camera.useOcclusionCulling = false;
 
         var zoom = camera.GetComponent<CameraZoomController>();
         if (zoom == null)
@@ -1042,6 +1694,38 @@ public static class FactoryYardBuilder
 
         EditorUtility.SetDirty(material);
         return material;
+    }
+
+    private static void EnsureOpaqueBuildingMaterial(Material material)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            var color = material.GetColor("_BaseColor");
+            color.a = 1f;
+            material.SetColor("_BaseColor", color);
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            var color = material.color;
+            color.a = 1f;
+            material.color = color;
+        }
+
+        // These are URP's opaque-material settings. The property checks keep
+        // the method compatible with the Standard shader as a fallback.
+        if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
+        if (material.HasProperty("_Blend")) material.SetFloat("_Blend", 0f);
+        if (material.HasProperty("_ZWrite")) material.SetFloat("_ZWrite", 1f);
+        material.SetOverrideTag("RenderType", "Opaque");
+        material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.EnableKeyword("_SURFACE_TYPE_OPAQUE");
+        material.renderQueue = (int)RenderQueue.Geometry;
+        EditorUtility.SetDirty(material);
     }
 
     private static void EnsureFolder(string path)

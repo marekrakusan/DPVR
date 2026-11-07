@@ -11,6 +11,7 @@ public sealed class ConveyorPackageMover : MonoBehaviour
     private float speed;
     private float groundY;
     private ConveyorDiverter diverter;
+    private ConveyorDropCoordinator dispatchCoordinator;
     private ConveyorBranch branch;
     private int diverterPreparationWaypoint;
     private bool diverterPrepared;
@@ -24,12 +25,14 @@ public sealed class ConveyorPackageMover : MonoBehaviour
         float floorHeight,
         ConveyorDiverter assignedDiverter,
         ConveyorBranch selectedBranch,
-        int preparationWaypoint)
+        int preparationWaypoint,
+        ConveyorDropCoordinator assignedCoordinator)
     {
         waypoints = path;
         speed = movementSpeed;
         groundY = floorHeight;
         diverter = assignedDiverter;
+        dispatchCoordinator = assignedCoordinator;
         branch = selectedBranch;
         nextWaypoint = 1;
         diverterPreparationWaypoint = Mathf.Max(1, preparationWaypoint);
@@ -61,12 +64,14 @@ public sealed class ConveyorPackageMover : MonoBehaviour
             // same parcel becomes part of the load instead of reaching ground.
             if (ForkliftLoadArea.TryCatchFallingPackage(gameObject, dropStart))
             {
+                NotifyArrival();
                 enabled = false;
                 return;
             }
 
             if (dropProgress >= 1f)
             {
+                NotifyArrival();
                 Destroy(gameObject, 5f);
                 enabled = false;
             }
@@ -91,6 +96,15 @@ public sealed class ConveyorPackageMover : MonoBehaviour
 
         dropStart = transform.position;
         isDropping = true;
+    }
+
+    private void NotifyArrival()
+    {
+        if (dispatchCoordinator != null)
+        {
+            dispatchCoordinator.NotifyPackageArrived();
+            dispatchCoordinator = null;
+        }
     }
 
     private void PrepareDiverterIfNeeded()

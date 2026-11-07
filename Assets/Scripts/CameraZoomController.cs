@@ -49,6 +49,10 @@ public sealed class CameraZoomController : MonoBehaviour
     private void Awake()
     {
         sceneCamera = GetComponent<Camera>();
+        // The delivery truck moves through the main-hall doorway. Prevent a
+        // previously baked building occluder from hiding this dynamic object
+        // while it is crossing the opening.
+        sceneCamera.useOcclusionCulling = false;
         EnsureMaximumDistance();
         CaptureWideView();
         currentDistance = maximumDistance;

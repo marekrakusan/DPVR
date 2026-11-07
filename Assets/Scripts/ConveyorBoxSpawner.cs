@@ -163,7 +163,8 @@ public sealed class ConveyorBoxSpawner : MonoBehaviour
             floorHeight,
             diverter,
             branch,
-            diverterPreparationWaypoint);
+            diverterPreparationWaypoint,
+            dispatchCoordinator);
     }
 
     private static bool IsValidPath(Transform[] path)

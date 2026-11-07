@@ -26,6 +26,9 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
     [Tooltip("Minimum spacing between departures from either loading window. This prevents simultaneous starts while allowing unequal path lengths to meet the fall deadline.")]
     [Min(0.5f)] public float minimumDispatchGap = 0.55f;
 
+    [Tooltip("Maximum number of parcels dispatched in one play-through. Generation stops after this amount.")]
+    [Min(1)] public int maximumPackagesPerRound = 30;
+
     public ConveyorBoxSpawner leftSpawner;
     public ConveyorBoxSpawner rightSpawner;
 
@@ -36,7 +39,16 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
     private ConveyorBoxSpawner lastScheduledSpawner;
     private ConveyorBranch lastScheduledBranch;
     private int scheduledSideRun;
-    private int scheduledBranchRun;
+    private int scheduledRouteRun;
+    private int reservedPackageCount;
+    public int DispatchedPackageCount { get; private set; }
+
+    /// <summary>
+    /// Number of parcels which have completed their conveyor journey. A parcel
+    /// counts here only after it reaches a landing zone or is caught by the
+    /// forklift, never merely when it leaves its loading window.
+    /// </summary>
+    public int DeliveredPackageCount { get; private set; }
 
     private struct ScheduledPackage
     {
@@ -92,6 +104,7 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
         {
             var package = scheduledPackages.Dequeue();
             package.spawner.SpawnReservedPackage(package.path, package.branch, package.packageNumber);
+            DispatchedPackageCount++;
         }
 
         if (!hasSchedule || lastScheduledFallTime < Time.time + SchedulingHorizon)
@@ -102,7 +115,8 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
 
     private void PlanUntil(float targetFallTime)
     {
-        while (!hasSchedule || lastScheduledFallTime < targetFallTime)
+        while (reservedPackageCount < maximumPackagesPerRound &&
+               (!hasSchedule || lastScheduledFallTime < targetFallTime))
         {
             if (!TryScheduleNextPackage())
             {
@@ -113,6 +127,11 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
 
     private bool TryScheduleNextPackage()
     {
+        if (reservedPackageCount >= maximumPackagesPerRound)
+        {
+            return false;
+        }
+
         var validChoices = new List<RouteChoice>(4);
         AddValidChoices(leftSpawner, validChoices);
         AddValidChoices(rightSpawner, validChoices);
@@ -122,7 +141,11 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
             return false;
         }
 
-        var choice = validChoices[Random.Range(0, validChoices.Count)];
+        // The first parcel of a round always takes the shortest available
+        // route. Later parcels retain the requested random routing rules.
+        var choice = hasSchedule
+            ? validChoices[Random.Range(0, validChoices.Count)]
+            : FindShortestRoute(validChoices);
         if (!choice.spawner.TryReservePath(choice.branch, out var path, out var packageNumber))
         {
             return false;
@@ -139,9 +162,10 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
         scheduledSideRun = hadSchedule && choice.spawner == lastScheduledSpawner
             ? scheduledSideRun + 1
             : 1;
-        scheduledBranchRun = hadSchedule && choice.branch == lastScheduledBranch
-            ? scheduledBranchRun + 1
+        scheduledRouteRun = hadSchedule && choice.spawner == lastScheduledSpawner && choice.branch == lastScheduledBranch
+            ? scheduledRouteRun + 1
             : 1;
+        reservedPackageCount++;
 
         hasSchedule = true;
         lastScheduledSpawner = choice.spawner;
@@ -149,6 +173,37 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
         lastScheduledDispatchTime = choice.dispatchTime;
         lastScheduledFallTime = choice.fallTime;
         return true;
+    }
+
+    private static RouteChoice FindShortestRoute(List<RouteChoice> choices)
+    {
+        var shortestChoice = choices[0];
+        var shortestTravelTime = GetTravelTime(shortestChoice);
+        for (var index = 1; index < choices.Count; index++)
+        {
+            var candidate = choices[index];
+            var candidateTravelTime = GetTravelTime(candidate);
+            if (candidateTravelTime < shortestTravelTime)
+            {
+                shortestChoice = candidate;
+                shortestTravelTime = candidateTravelTime;
+            }
+        }
+
+        return shortestChoice;
+    }
+
+    private static float GetTravelTime(RouteChoice choice)
+    {
+        if (choice.spawner == null)
+        {
+            return float.PositiveInfinity;
+        }
+
+        var path = choice.branch == ConveyorBranch.A
+            ? choice.spawner.branchPathA
+            : choice.spawner.branchPathB;
+        return choice.spawner.GetTravelTime(path);
     }
 
     private void AddValidChoices(ConveyorBoxSpawner spawner, List<RouteChoice> choices)
@@ -172,7 +227,10 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
             return;
         }
 
-        if (hasSchedule && branch == lastScheduledBranch && scheduledBranchRun >= MaximumConsecutivePackagesPerBranch)
+        // A branch is specific to one physical conveyor. For example,
+        // left-A and right-A are separate branches and may follow each other.
+        if (hasSchedule && spawner == lastScheduledSpawner && branch == lastScheduledBranch &&
+            scheduledRouteRun >= MaximumConsecutivePackagesPerBranch)
         {
             return;
         }
@@ -208,5 +266,18 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
         }
 
         choices.Add(new RouteChoice(spawner, branch, dispatchTime, fallTime));
+    }
+
+    /// <summary>
+    /// Called by a package mover once the parcel actually arrives at a
+    /// discharge zone. The truck watches this value, so its gate cannot open
+    /// while the final parcel is still travelling on a conveyor.
+    /// </summary>
+    public void NotifyPackageArrived()
+    {
+        if (DeliveredPackageCount < maximumPackagesPerRound)
+        {
+            DeliveredPackageCount++;
+        }
     }
 }

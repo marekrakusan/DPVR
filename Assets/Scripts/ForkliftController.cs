@@ -14,10 +14,12 @@ public sealed class ForkliftController : MonoBehaviour
     [Min(0f)] public float turnSpeedDegreesPerSecond = 720f;
 
     private float lockedHeight;
+    private CharacterController collisionController;
 
     private void Awake()
     {
         lockedHeight = transform.position.y;
+        collisionController = GetComponent<CharacterController>();
     }
 
     private void Update()
@@ -42,7 +44,19 @@ public sealed class ForkliftController : MonoBehaviour
         var direction = new Vector3(input.x, 0f, input.y).normalized;
         TurnFrontToward(direction);
 
-        var position = transform.position + direction * (movementSpeed * Time.deltaTime);
+        var movement = direction * (movementSpeed * Time.deltaTime);
+        if (collisionController != null && collisionController.enabled)
+        {
+            // CharacterController.Move performs a swept collision check, so
+            // the forklift stops at the solid hall walls and roof geometry.
+            collisionController.Move(movement);
+        }
+        else
+        {
+            transform.position += movement;
+        }
+
+        var position = transform.position;
         position.y = lockedHeight;
         transform.position = position;
     }
