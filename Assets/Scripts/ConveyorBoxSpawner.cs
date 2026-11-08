@@ -30,6 +30,15 @@ public sealed class ConveyorBoxSpawner : MonoBehaviour
 
     private int packageIndex;
 
+    private void Awake()
+    {
+        // Scale the belt before the shared coordinator calculates route travel
+        // times in Start. The fallback interval is adjusted as well so this
+        // component behaves consistently in a standalone scene.
+        beltSpeed *= LevelProgression.ConveyorSpeedMultiplier;
+        intervalSeconds *= LevelProgression.FallDelayMultiplier;
+    }
+
     private void Start()
     {
         // The factory scene assigns a shared dispatcher, which calculates

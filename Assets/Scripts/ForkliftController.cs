@@ -2,10 +2,10 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Drives the forklift across the factory yard with WASD. Movement uses the
-/// world XZ ground plane and turns the visible front of the forklift toward
-/// the direction of travel. Attach this component to Forklift_Controller,
-/// the empty wrapper around the imported FBX model.
+/// Drives the forklift across the factory yard with WASD or the arrow keys.
+/// Movement uses the world XZ ground plane and turns the visible front of the
+/// forklift toward the direction of travel. Attach this component to
+/// Forklift_Controller, the empty wrapper around the imported FBX model.
 /// </summary>
 [DisallowMultipleComponent]
 public sealed class ForkliftController : MonoBehaviour
@@ -18,6 +18,8 @@ public sealed class ForkliftController : MonoBehaviour
 
     private void Awake()
     {
+        // Level 2 keeps the same handling but covers ground 20% faster.
+        movementSpeed *= LevelProgression.ForkliftSpeedMultiplier;
         lockedHeight = transform.position.y;
         collisionController = GetComponent<CharacterController>();
     }
@@ -31,10 +33,12 @@ public sealed class ForkliftController : MonoBehaviour
         }
 
         var input = Vector2.zero;
-        if (keyboard.wKey.isPressed) input.y += 1f;
-        if (keyboard.sKey.isPressed) input.y -= 1f;
-        if (keyboard.aKey.isPressed) input.x -= 1f;
-        if (keyboard.dKey.isPressed) input.x += 1f;
+        // Keep WASD and arrow keys equivalent, including diagonal movement
+        // when one horizontal and one vertical key are held together.
+        if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed) input.y += 1f;
+        if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed) input.y -= 1f;
+        if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed) input.x -= 1f;
+        if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed) input.x += 1f;
 
         if (input.sqrMagnitude < 0.0001f)
         {

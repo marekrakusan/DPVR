@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -75,7 +76,9 @@ public static class FactoryYardBuilder
         AddRuntimeBoxFlow(root.transform, boxes, cardboard, tape);
         AddLightingAndCamera(root.transform);
         EnsureLevelIntroOverlay(root.transform);
+        EnsureLevelOutcomeOverlay(root.transform);
         AddDeliveryTruckWorkflow();
+        EnsureFactoryYardInBuildSettings();
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.SaveScene(scene, ScenePath);
@@ -319,6 +322,8 @@ public static class FactoryYardBuilder
 
         var hallYellow = GetMaterial("Factory_Yellow", new Color(0.92f, 0.57f, 0.06f), 0.42f, 0.05f);
         EnsureMainGateOpening(root.transform, hallYellow);
+        EnsureFolder("Assets/FactoryYard");
+        EnsureFolder(MaterialFolder);
 
         var truck = GameObject.Find("Delivery_Truck_Controller");
         if (truck == null)
@@ -362,16 +367,19 @@ public static class FactoryYardBuilder
         controller.truckVisual = truck.transform.Find("Delivery_Truck_Visual");
         if (controller.truckVisual != null)
         {
+            // The FBX intentionally retains its Blender material names, but
+            // Unity does not create usable material assets for this import.
+            // Apply project-owned materials by the stable object names so the
+            // orange cab, dark tarp, tyres and white DPVR logo stay coloured
+            // after every re-import of the truck.
+            ApplyTruckMaterials(controller.truckVisual);
+
             // The Blender FBX can carry centimetre units even when its scene
             // is authored in metres.  Normalize the imported visual to its
             // intended road-going footprint so it is plainly visible in this
             // yard and fits through the 6.35 m gate.
             NormalizeTruckVisualDimensions(controller.truckVisual);
-            if (TryGetVisualBounds(controller.truckVisual, out var bounds) &&
-                Mathf.Abs(bounds.min.y) > 0.005f)
-            {
-                controller.truckVisual.localPosition += Vector3.up * -bounds.min.y;
-            }
+            AlignTruckVisualOnWheels(controller.truckVisual);
 
             // The Blender truck may be refined without changing this builder.
             // Fit its collider after it has been placed on the concrete rather
@@ -381,10 +389,15 @@ public static class FactoryYardBuilder
         controller.cargoAnchor = cargo;
         controller.cargoCover = FindDescendant(controller.truckVisual, "Cargo_Tarp")?.gameObject;
         controller.gate = gate;
-        controller.approachZ = 9.5f;
-        controller.exitZ = truckStartZ;
+        controller.gateEntryPosition = new Vector3(0f, 0f, 10.7f);
+        controller.loadingStopPosition = new Vector3(-3f, 0f, 8.5f);
+        controller.loadingStopYaw = 50f;
+        controller.reverseTurnPosition = new Vector3(0.2f, 0f, 11.2f);
+        controller.exitPosition = new Vector3(0.2f, 0f, truckStartZ);
 
         EnsureLevelIntroOverlay(root.transform);
+        controller.outcomeOverlay = EnsureLevelOutcomeOverlay(root.transform);
+        EnsureFactoryYardInBuildSettings();
 
         EditorUtility.SetDirty(controller);
         EditorSceneManager.MarkSceneDirty(root.scene);
@@ -400,10 +413,11 @@ public static class FactoryYardBuilder
             return;
         }
 
-        // Dimensions in the Unity yard: conventional 2.5 m wide, 3.0 m tall
-        // and 6.25 m long.  The model points along Z and therefore still has
-        // clearance at the 6.35 m-wide gate.
-        var targetSize = new Vector3(2.50f, 3.00f, 6.25f);
+        // Dimensions in the Unity yard: conventional 2.5 m wide, 3.8 m tall
+        // and 6.25 m long. The extra cargo height covers the five loaded
+        // parcel layers while retaining ample clearance in the 6.35 m-high
+        // gate. The model points along Z.
+        var targetSize = new Vector3(2.50f, 3.80f, 6.25f);
         var sourceSize = sourceBounds.size;
         visual.localScale = new Vector3(
             targetSize.x / Mathf.Max(0.001f, sourceSize.x),
@@ -442,6 +456,48 @@ public static class FactoryYardBuilder
     }
 
     /// <summary>
+    /// Places the delivery vehicle by the tyres rather than by whichever
+    /// decorative renderer happens to extend lowest. This makes the wheels
+    /// meet the concrete reliably after any future Blender re-export.
+    /// </summary>
+    private static void AlignTruckVisualOnWheels(Transform visual)
+    {
+        if (visual == null)
+        {
+            return;
+        }
+
+        var hasWheelBounds = false;
+        var wheelBounds = new Bounds();
+        foreach (var renderer in visual.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer.enabled || !renderer.gameObject.name.StartsWith("Wheel", System.StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (hasWheelBounds)
+            {
+                wheelBounds.Encapsulate(renderer.bounds);
+            }
+            else
+            {
+                wheelBounds = renderer.bounds;
+                hasWheelBounds = true;
+            }
+        }
+
+        if (hasWheelBounds)
+        {
+            visual.localPosition += Vector3.up * -wheelBounds.min.y;
+        }
+        else if (TryGetVisualBounds(visual, out var bounds))
+        {
+            visual.localPosition += Vector3.up * -bounds.min.y;
+        }
+    }
+
+    /// <summary>
     /// Makes the controller's collision volume follow the imported truck.
     /// The source model is intentionally kept in Blender, therefore this
     /// avoids coupling the Unity route to a particular mesh size.
@@ -470,6 +526,92 @@ public static class FactoryYardBuilder
             bounds.size.y + 0.06f,
             bounds.size.z + 0.08f);
         collider.isTrigger = false;
+    }
+
+    /// <summary>
+    /// Gives the imported Blender truck its authored visual treatment using
+    /// material assets owned by this Unity project. The FBX names are stable
+    /// and this keeps colours reliable when Unity cannot extract embedded FBX
+    /// materials automatically.
+    /// </summary>
+    private static void ApplyTruckMaterials(Transform visual)
+    {
+        if (visual == null)
+        {
+            return;
+        }
+
+        var cabOrange = GetMaterial("Truck_Cab_Orange", new Color(0.90f, 0.23f, 0.035f), 0.42f, 0.08f);
+        var tarpGray = GetMaterial("Truck_Tarp_Gray", new Color(0.32f, 0.34f, 0.36f), 0.32f, 0.05f);
+        var darkMetal = GetMaterial("Truck_Dark_Metal", new Color(0.09f, 0.12f, 0.15f), 0.48f, 0.58f);
+        var tyre = GetMaterial("Truck_Tyre", new Color(0.018f, 0.022f, 0.028f), 0.18f, 0.02f);
+        var glass = GetMaterial("Truck_Glass", new Color(0.045f, 0.14f, 0.22f), 0.82f, 0.10f);
+        var headlamp = GetMaterial("Truck_Headlamp", new Color(1f, 0.72f, 0.24f), 0.72f, 0.05f);
+        var logo = GetMaterial("Truck_DPVR_White", new Color(0.96f, 0.98f, 1f), 0.48f, 0f);
+
+        foreach (var renderer in visual.GetComponentsInChildren<Renderer>(true))
+        {
+            var objectName = renderer.gameObject.name.ToLowerInvariant();
+            Material assignedMaterial;
+
+            if (objectName.Contains("dpvr"))
+            {
+                assignedMaterial = logo;
+            }
+            else if (objectName.Contains("cargo_tarp"))
+            {
+                assignedMaterial = tarpGray;
+            }
+            else if (objectName.StartsWith("wheel"))
+            {
+                assignedMaterial = tyre;
+            }
+            else if (objectName.Contains("headlight"))
+            {
+                assignedMaterial = headlamp;
+            }
+            else if (objectName.Contains("windshield"))
+            {
+                assignedMaterial = glass;
+            }
+            else if (objectName.Contains("chassis") ||
+                     objectName.Contains("bumper") ||
+                     objectName.Contains("grille") ||
+                     objectName.Contains("hub") ||
+                     objectName.Contains("mirror") ||
+                     objectName.Contains("tarp_rib") ||
+                     objectName.Contains("interior") ||
+                     objectName.Contains("dashboard") ||
+                     objectName.Contains("steering"))
+            {
+                assignedMaterial = darkMetal;
+            }
+            else
+            {
+                // The cab mesh and Cargo_Base are both deliberately painted
+                // orange. It also makes unnamed cab submeshes safely colourful.
+                assignedMaterial = cabOrange;
+            }
+
+            AssignAllMaterialSlots(renderer, assignedMaterial);
+        }
+    }
+
+    private static void AssignAllMaterialSlots(Renderer renderer, Material material)
+    {
+        if (renderer == null || material == null)
+        {
+            return;
+        }
+
+        var slotCount = Mathf.Max(1, renderer.sharedMaterials.Length);
+        var slots = new Material[slotCount];
+        for (var index = 0; index < slots.Length; index++)
+        {
+            slots[index] = material;
+        }
+
+        renderer.sharedMaterials = slots;
     }
 
     private static void EnsureMainGateOpening(Transform root, Material wallMaterial)
@@ -596,7 +738,7 @@ public static class FactoryYardBuilder
             return;
         }
 
-        coordinator.minimumDelayBetweenFalls = 3.5f;
+        coordinator.minimumDelayBetweenFalls = 4f;
         coordinator.maximumDelayBetweenFalls = 7f;
         coordinator.minimumDispatchGap = 0.55f;
         coordinator.maximumPackagesPerRound = 30;
@@ -611,7 +753,7 @@ public static class FactoryYardBuilder
         EditorSceneManager.MarkSceneDirty(root.scene);
         EditorSceneManager.SaveScene(root.scene);
         Selection.activeGameObject = runtime.gameObject;
-        Debug.Log("Applied parcel limits (3 branches, 5 sides, 3.5–7 s falls) and camera zoom.");
+        Debug.Log("Applied parcel limits (3 branches, 5 sides, 4–7 s falls) and camera zoom.");
     }
 
     /// <summary>
@@ -1194,7 +1336,7 @@ public static class FactoryYardBuilder
         var runtime = new GameObject("Runtime_Box_Flow").transform;
         runtime.SetParent(root);
         var dropCoordinator = runtime.gameObject.AddComponent<ConveyorDropCoordinator>();
-        dropCoordinator.minimumDelayBetweenFalls = 3.5f;
+        dropCoordinator.minimumDelayBetweenFalls = 4f;
         dropCoordinator.maximumDelayBetweenFalls = 7f;
         dropCoordinator.minimumDispatchGap = 0.55f;
         dropCoordinator.maximumPackagesPerRound = 30;
@@ -1310,6 +1452,52 @@ public static class FactoryYardBuilder
         intro.levelLabel = "Level 1";
         intro.objectiveLabel = "25/30\nto pass";
         EditorUtility.SetDirty(intro);
+    }
+
+    private static LevelOutcomeOverlay EnsureLevelOutcomeOverlay(Transform root)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        var outcome = root.GetComponent<LevelOutcomeOverlay>();
+        if (outcome == null)
+        {
+            outcome = Undo.AddComponent<LevelOutcomeOverlay>(root.gameObject);
+        }
+
+        outcome.requiredLoadedPackages = 25;
+        outcome.nextLevelPromptDelay = 2f;
+        outcome.completedLabel = "Level completed";
+        outcome.nextLevelLabel = "NEXT LEVEL";
+        outcome.failedLabel = "You failed!";
+        outcome.restartLabel = "RESTART";
+        EditorUtility.SetDirty(outcome);
+        return outcome;
+    }
+
+    private static void EnsureFactoryYardInBuildSettings()
+    {
+        var scenes = new List<EditorBuildSettingsScene>(EditorBuildSettings.scenes);
+        for (var index = 0; index < scenes.Count; index++)
+        {
+            if (scenes[index].path != ScenePath)
+            {
+                continue;
+            }
+
+            if (!scenes[index].enabled)
+            {
+                scenes[index] = new EditorBuildSettingsScene(ScenePath, true);
+                EditorBuildSettings.scenes = scenes.ToArray();
+            }
+
+            return;
+        }
+
+        scenes.Add(new EditorBuildSettingsScene(ScenePath, true));
+        EditorBuildSettings.scenes = scenes.ToArray();
     }
 
     private static ConveyorDiverter ConfigureDiverter(Transform conveyor)

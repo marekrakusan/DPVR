@@ -16,6 +16,8 @@ public sealed class LevelIntroOverlay : MonoBehaviour
     private void Awake()
     {
         startedAt = Time.unscaledTime;
+        levelLabel = $"Level {LevelProgression.CurrentLevel}";
+        objectiveLabel = $"{LevelProgression.RequiredLoadedPackages}/30\nto pass";
     }
 
     private void OnGUI()

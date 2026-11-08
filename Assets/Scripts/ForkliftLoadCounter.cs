@@ -10,6 +10,7 @@ public sealed class ForkliftLoadCounter : MonoBehaviour
     public TextMesh counterText;
 
     private ForkliftLoadArea loadArea;
+    private DeliveryTruckController deliveryTruck;
     private int lastCount = -1;
 
     private void OnEnable()
@@ -39,7 +40,17 @@ public sealed class ForkliftLoadCounter : MonoBehaviour
             loadArea = Object.FindAnyObjectByType<ForkliftLoadArea>();
         }
 
-        var count = loadArea != null ? loadArea.LoadedPackageCount : 0;
+        if (deliveryTruck == null)
+        {
+            deliveryTruck = Object.FindAnyObjectByType<DeliveryTruckController>();
+        }
+
+        // Once boxes are transferred to the truck, the forklift anchor is
+        // empty. Keep the recorded number illuminated above the gate for the
+        // rest of this level, including the truck's departure and outcome.
+        var count = deliveryTruck != null && deliveryTruck.ShouldHoldLoadCounterUntilLevelEnds
+            ? deliveryTruck.LoadedPackageCount
+            : loadArea != null ? loadArea.LoadedPackageCount : 0;
         if (count == lastCount)
         {
             return;
