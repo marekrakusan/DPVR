@@ -39,44 +39,68 @@ public sealed class LevelOutcomeOverlay : MonoBehaviour
     public void ShowResult(bool completed)
     {
         state = completed ? OutcomeState.Completed : OutcomeState.Failed;
-        stateStartedAt = Time.unscaledTime;
+        stateStartedAt = Time.time;
     }
 
     private void Update()
     {
+        // A pause menu owns Space while it is open, so a paused result cannot
+        // accidentally advance or restart the level underneath the menu.
+        if (GamePauseOverlay.IsPaused)
+        {
+            return;
+        }
+
         if (state == OutcomeState.Completed &&
-            Time.unscaledTime - stateStartedAt >= nextLevelPromptDelay)
+            Time.time - stateStartedAt >= nextLevelPromptDelay)
         {
             state = LevelProgression.CanAdvance
                 ? OutcomeState.NextLevel
                 : OutcomeState.FinalRestart;
-            stateStartedAt = Time.unscaledTime;
+            stateStartedAt = Time.time;
         }
 
         if (state == OutcomeState.NextLevel && Keyboard.current != null &&
             Keyboard.current.spaceKey.wasPressedThisFrame)
         {
-            LevelProgression.Advance();
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+            AdvanceToNextLevel();
         }
 
         if (state == OutcomeState.Failed && Keyboard.current != null &&
             Keyboard.current.spaceKey.wasPressedThisFrame)
         {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+            RestartCurrentLevel();
         }
 
         if (state == OutcomeState.FinalRestart && Keyboard.current != null &&
             Keyboard.current.spaceKey.wasPressedThisFrame)
         {
-            LevelProgression.RestartCampaign();
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+            RestartCampaign();
         }
+    }
+
+    private static void AdvanceToNextLevel()
+    {
+        LevelProgression.Advance();
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    private static void RestartCurrentLevel()
+    {
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    private static void RestartCampaign()
+    {
+        LevelProgression.RestartCampaign();
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     private void OnGUI()
     {
-        if (state == OutcomeState.Hidden)
+        // Avoid layering a level result underneath the pause menu. The
+        // result state remains intact and returns as soon as the user resumes.
+        if (state == OutcomeState.Hidden || GamePauseOverlay.IsPaused)
         {
             return;
         }
@@ -97,23 +121,41 @@ public sealed class LevelOutcomeOverlay : MonoBehaviour
             fontStyle = FontStyle.Normal,
         };
 
+        var buttonStyle = new GUIStyle(GUI.skin.button)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = restartStyle.fontSize,
+            fontStyle = FontStyle.Bold,
+            padding = new RectOffset(12, 12, 8, 8),
+        };
+
         var headlineRect = new Rect(centreX - width * 0.5f, centreY - 44f, width, 88f);
+        var actionRect = new Rect(centreX - 135f, headlineRect.y + 86f, 270f, 48f);
         switch (state)
         {
             case OutcomeState.Completed:
                 GUI.Label(headlineRect, completedLabel, headlineStyle);
                 break;
             case OutcomeState.NextLevel:
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y - 26f, headlineRect.width, 78f), completedLabel, headlineStyle);
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y + 50f, headlineRect.width, 42f), nextLevelLabel, restartStyle);
+                GUI.Label(headlineRect, completedLabel, headlineStyle);
+                if (GUI.Button(actionRect, nextLevelLabel, buttonStyle))
+                {
+                    AdvanceToNextLevel();
+                }
                 break;
             case OutcomeState.Failed:
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y - 26f, headlineRect.width, 78f), failedLabel, headlineStyle);
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y + 50f, headlineRect.width, 42f), restartLabel, restartStyle);
+                GUI.Label(headlineRect, failedLabel, headlineStyle);
+                if (GUI.Button(actionRect, restartLabel, buttonStyle))
+                {
+                    RestartCurrentLevel();
+                }
                 break;
             case OutcomeState.FinalRestart:
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y - 26f, headlineRect.width, 78f), completedLabel, headlineStyle);
-                GUI.Label(new Rect(headlineRect.x, headlineRect.y + 50f, headlineRect.width, 42f), restartLabel, restartStyle);
+                GUI.Label(headlineRect, completedLabel, headlineStyle);
+                if (GUI.Button(actionRect, restartLabel, buttonStyle))
+                {
+                    RestartCampaign();
+                }
                 break;
         }
     }

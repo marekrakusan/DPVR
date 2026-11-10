@@ -77,6 +77,7 @@ public static class FactoryYardBuilder
         AddLightingAndCamera(root.transform);
         EnsureLevelIntroOverlay(root.transform);
         EnsureLevelOutcomeOverlay(root.transform);
+        EnsureGamePauseOverlay(root.transform);
         AddDeliveryTruckWorkflow();
         EnsureFactoryYardInBuildSettings();
 
@@ -834,6 +835,34 @@ public static class FactoryYardBuilder
     }
 
     /// <summary>
+    /// Adds the Escape pause menu to the current factory-yard scene without
+    /// rebuilding or moving any existing objects.
+    /// </summary>
+    [MenuItem("Factory/Enable Pause Menu")]
+    private static void EnablePauseMenu()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before enabling the pause menu.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        if (root == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "The Factory_Yard root could not be found in the open scene.", "OK");
+            return;
+        }
+
+        var pause = EnsureGamePauseOverlay(root.transform);
+        EditorUtility.SetDirty(pause);
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = pause.gameObject;
+        Debug.Log("Pause menu enabled: Escape opens Continue and Restart; Space restarts while paused.");
+    }
+
+    /// <summary>
     /// Adds the 30-package loading area to the current forklift without
     /// changing its placement, its model or the conveyor layout.
     /// </summary>
@@ -1475,6 +1504,26 @@ public static class FactoryYardBuilder
         outcome.restartLabel = "RESTART";
         EditorUtility.SetDirty(outcome);
         return outcome;
+    }
+
+    private static GamePauseOverlay EnsureGamePauseOverlay(Transform root)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        var pause = root.GetComponent<GamePauseOverlay>();
+        if (pause == null)
+        {
+            pause = Undo.AddComponent<GamePauseOverlay>(root.gameObject);
+        }
+
+        pause.pausedLabel = "Paused";
+        pause.continueLabel = "Continue";
+        pause.restartLabel = "Restart";
+        EditorUtility.SetDirty(pause);
+        return pause;
     }
 
     private static void EnsureFactoryYardInBuildSettings()

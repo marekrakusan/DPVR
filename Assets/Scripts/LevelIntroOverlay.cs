@@ -15,14 +15,21 @@ public sealed class LevelIntroOverlay : MonoBehaviour
 
     private void Awake()
     {
-        startedAt = Time.unscaledTime;
+        startedAt = Time.time;
         levelLabel = $"Level {LevelProgression.CurrentLevel}";
         objectiveLabel = $"{LevelProgression.RequiredLoadedPackages}/30\nto pass";
     }
 
     private void OnGUI()
     {
-        if (Time.unscaledTime - startedAt >= duration)
+        // The pause menu is the only overlay that should be visible while
+        // the game is stopped. Its timer is already frozen by Time.time.
+        if (GamePauseOverlay.IsPaused)
+        {
+            return;
+        }
+
+        if (Time.time - startedAt >= duration)
         {
             return;
         }
