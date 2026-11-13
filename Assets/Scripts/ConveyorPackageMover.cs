@@ -71,6 +71,9 @@ public sealed class ConveyorPackageMover : MonoBehaviour
 
             if (dropProgress >= 1f)
             {
+                // This path is reached only when the forklift did not catch
+                // the parcel above the marked landing zone.
+                FactoryAudioController.PlayPackageDropped();
                 NotifyArrival();
                 Destroy(gameObject, 5f);
                 enabled = false;

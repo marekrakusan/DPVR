@@ -1057,6 +1057,527 @@ public static class FactoryYardBuilder
         Debug.Log("Forklift package loading enabled: 30 parcels, arranged 2 x 3 x 5.");
     }
 
+    /// <summary>
+    /// Adds the exterior factory yard as a self-contained extension. It never
+    /// rebuilds the halls, conveyors, forklift, truck or their hand-tuned
+    /// transforms; rerunning the command replaces only this named extension.
+    /// </summary>
+    [MenuItem("Factory/Add Exterior Yard, Fence and Parking")]
+    private static void AddExteriorYardFenceAndParking()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before expanding the exterior yard.", "OK");
+            return;
+        }
+
+        var factoryRoot = GameObject.Find("Factory_Yard")?.transform;
+        if (factoryRoot == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        var previous = factoryRoot.Find("Exterior_Yard_Expansion");
+        if (previous != null)
+        {
+            Undo.DestroyObjectImmediate(previous.gameObject);
+        }
+
+        EnsureFolder("Assets/FactoryYard");
+        EnsureFolder(MaterialFolder);
+        var exteriorConcrete = GetMaterial("Exterior_Yard_Concrete", new Color(0.31f, 0.34f, 0.36f), 0.54f, 0.03f);
+        var gameplayConcrete = GetMaterial("Gameplay_Yard_Concrete", new Color(0.42f, 0.45f, 0.47f), 0.62f, 0.02f);
+        var pavingJoint = GetMaterial("Gameplay_Paving_Joint", new Color(0.29f, 0.32f, 0.34f), 0.34f, 0.03f);
+        // Keep the grass unlit and opaque so it stays distinctly green even
+        // where the exterior receives little directional light.
+        var grass = GetUniformRoofMaterial("Yard_Grass", new Color(0.10f, 0.48f, 0.12f));
+        var roadAsphalt = GetMaterial("Yard_Road_Asphalt", new Color(0.12f, 0.14f, 0.16f), 0.44f, 0.04f);
+        var fenceMetal = GetMaterial("Yard_Fence_Metal", new Color(0.13f, 0.16f, 0.18f), 0.57f, 0.72f);
+        var fenceWire = GetMaterial("Yard_Fence_Wire", new Color(0.31f, 0.35f, 0.38f), 0.50f, 0.78f);
+        var parkingAsphalt = GetMaterial("Parking_Asphalt", new Color(0.15f, 0.17f, 0.19f), 0.44f, 0.04f);
+        var parkingPaint = GetMaterial("Parking_Paint", new Color(0.92f, 0.94f, 0.95f), 0.35f, 0.02f);
+        var cableMaterial = GetMaterial("Cable_Black", new Color(0.025f, 0.03f, 0.035f), 0.40f, 0.12f);
+        var reelMaterial = GetMaterial("Cable_Reel_Orange", new Color(0.76f, 0.29f, 0.06f), 0.43f, 0.28f);
+        var pipeMaterial = GetMaterial("Pipe_Blue", new Color(0.12f, 0.31f, 0.49f), 0.48f, 0.74f);
+        var woodMaterial = GetMaterial("Yard_Pallet_Wood", new Color(0.37f, 0.20f, 0.075f), 0.50f, 0.02f);
+        var cardboardMaterial = GetMaterial("Yard_Cardboard", new Color(0.61f, 0.38f, 0.15f), 0.58f, 0.01f);
+        var barrelMaterial = GetMaterial("Yard_Barrel_Blue", new Color(0.035f, 0.21f, 0.43f), 0.55f, 0.70f);
+        var storageMaterial = GetMaterial("Yard_Storage_Grey", new Color(0.24f, 0.29f, 0.32f), 0.52f, 0.58f);
+
+        var exterior = new GameObject("Exterior_Yard_Expansion").transform;
+        Undo.RegisterCreatedObjectUndo(exterior.gameObject, "Add exterior factory yard");
+        exterior.SetParent(factoryRoot, false);
+
+        BuildExteriorGround(exterior, exteriorConcrete, gameplayConcrete, pavingJoint, grass, roadAsphalt);
+        BuildPerimeterFence(exterior, fenceMetal, fenceWire);
+        BuildParkingAreas(exterior, parkingAsphalt, parkingPaint);
+        BuildYardProps(
+            exterior,
+            reelMaterial,
+            cableMaterial,
+            pipeMaterial,
+            woodMaterial,
+            cardboardMaterial,
+            barrelMaterial,
+            storageMaterial);
+        EnsureFactoryAudio(factoryRoot);
+
+        EditorSceneManager.MarkSceneDirty(factoryRoot.gameObject.scene);
+        EditorSceneManager.SaveScene(factoryRoot.gameObject.scene);
+        Selection.activeGameObject = exterior.gameObject;
+        Debug.Log("Added exterior yard: solid perimeter fence, parking, paving and industrial props. Existing factory objects were not changed.");
+    }
+
+    private static void BuildExteriorGround(
+        Transform parent,
+        Material exteriorConcrete,
+        Material gameplayConcrete,
+        Material pavingJoint,
+        Material grass,
+        Material roadAsphalt)
+    {
+        var ground = new GameObject("Ground_and_Paving").transform;
+        ground.SetParent(parent, false);
+
+        // The green base makes the outside of the fenced yard clearly read as
+        // grounds rather than as an endlessly paved industrial slab.
+        CreateVisualCube(
+            "Exterior_Grass_Ground",
+            ground,
+            // Match the complete original grey yard slab below it. This makes
+            // every exterior area beyond the fenced concrete visibly green.
+            new Vector3(0f, 0.002f, 1.5f),
+            new Vector3(200f, 0.004f, 200f),
+            grass);
+
+        // Concrete belongs inside the fenced factory compound. It stops just
+        // before the rear fence so the parking and access road beyond it sit
+        // visibly in the green exterior zone.
+        CreateVisualCube(
+            "Exterior_Concrete_Yard",
+            ground,
+            new Vector3(0f, 0.005f, -4.325f),
+            new Vector3(80f, 0.004f, 50.35f),
+            exteriorConcrete);
+
+        // The gate opening continues as a road through the green space, then
+        // meets a horizontal road directly alongside both parking areas.
+        CreateVisualCube(
+            "Entrance_Road",
+            ground,
+            new Vector3(0f, 0.008f, 27.85f),
+            new Vector3(8f, 0.006f, 14.0f),
+            roadAsphalt);
+        CreateVisualCube(
+            "North_Access_Road",
+            ground,
+            new Vector3(0f, 0.008f, 32.0f),
+            new Vector3(200f, 0.006f, 5.50f),
+            roadAsphalt);
+
+        // A subtly different inner slab identifies the playable forklift
+        // courtyard while leaving the outer factory yard slightly darker.
+        var gameplayCentre = new Vector3(0f, 0.009f, 0.9f);
+        const float gameplayWidth = 40.5f;
+        const float gameplayDepth = 29.0f;
+        CreateVisualCube(
+            "Gameplay_Concrete_Area",
+            ground,
+            gameplayCentre,
+            new Vector3(gameplayWidth, 0.006f, gameplayDepth),
+            gameplayConcrete);
+
+        // Fine 4-metre joints give the centre slab a readable paved texture
+        // without making the floor bumpy or affecting vehicle movement.
+        var left = gameplayCentre.x - gameplayWidth * 0.5f;
+        var right = gameplayCentre.x + gameplayWidth * 0.5f;
+        var front = gameplayCentre.z - gameplayDepth * 0.5f;
+        var back = gameplayCentre.z + gameplayDepth * 0.5f;
+        for (var x = left + 4f; x < right - 0.1f; x += 4f)
+        {
+            CreateVisualCube(
+                $"Gameplay_Joint_X_{x:0}",
+                ground,
+                new Vector3(x, 0.014f, gameplayCentre.z),
+                new Vector3(0.030f, 0.002f, gameplayDepth - 0.16f),
+                pavingJoint);
+        }
+
+        for (var z = front + 4f; z < back - 0.1f; z += 4f)
+        {
+            CreateVisualCube(
+                $"Gameplay_Joint_Z_{z:0}",
+                ground,
+                new Vector3(gameplayCentre.x, 0.014f, z),
+                new Vector3(gameplayWidth - 0.16f, 0.002f, 0.030f),
+                pavingJoint);
+        }
+    }
+
+    private static void BuildPerimeterFence(Transform parent, Material metal, Material wire)
+    {
+        var fence = new GameObject("Perimeter_Fence").transform;
+        fence.SetParent(parent, false);
+
+        const float left = -40f;
+        const float right = 40f;
+        const float south = -29.5f;
+        const float north = 20.85f;
+        const float entranceHalfWidth = 4.5f;
+
+        // The rear boundary follows the main hall's outer wall level, while a
+        // 9-metre central opening keeps the delivery-truck entry completely
+        // free. The two sections have separate colliders, so the visual gap
+        // is also a real route through the fence.
+        CreateFenceRun(fence, "Fence_North_West", new Vector3(left, 0f, north), new Vector3(-entranceHalfWidth, 0f, north), metal, wire);
+        CreateFenceRun(fence, "Fence_North_East", new Vector3(entranceHalfWidth, 0f, north), new Vector3(right, 0f, north), metal, wire);
+        CreateFenceRun(fence, "Fence_East", new Vector3(right, 0f, north), new Vector3(right, 0f, south), metal, wire);
+        CreateFenceRun(fence, "Fence_South", new Vector3(right, 0f, south), new Vector3(left, 0f, south), metal, wire);
+        CreateFenceRun(fence, "Fence_West", new Vector3(left, 0f, south), new Vector3(left, 0f, north), metal, wire);
+    }
+
+    private static void CreateFenceRun(
+        Transform parent,
+        string name,
+        Vector3 start,
+        Vector3 end,
+        Material metal,
+        Material wire)
+    {
+        var direction = end - start;
+        direction.y = 0f;
+        var length = direction.magnitude;
+        if (length < 0.01f)
+        {
+            return;
+        }
+
+        var run = new GameObject(name).transform;
+        run.SetParent(parent, false);
+        var centre = (start + end) * 0.5f;
+        var rotation = Quaternion.FromToRotation(Vector3.right, direction.normalized);
+
+        CreateYardBeam(run, "Top_Rail", centre + Vector3.up * 2.35f, new Vector3(length + 0.18f, 0.10f, 0.10f), rotation, metal);
+        CreateYardBeam(run, "Middle_Rail", centre + Vector3.up * 1.25f, new Vector3(length + 0.18f, 0.055f, 0.055f), rotation, wire);
+        CreateYardBeam(run, "Bottom_Rail", centre + Vector3.up * 0.22f, new Vector3(length + 0.18f, 0.08f, 0.08f), rotation, metal);
+
+        var postCount = Mathf.CeilToInt(length / 4f);
+        for (var index = 0; index <= postCount; index++)
+        {
+            var t = index / (float)postCount;
+            var position = Vector3.Lerp(start, end, t) + Vector3.up * 1.18f;
+            CreateVisualCube($"Post_{index:00}", run, position, new Vector3(0.14f, 2.36f, 0.14f), metal);
+        }
+
+        var wireCount = Mathf.FloorToInt(length / 1.05f);
+        for (var index = 1; index < wireCount; index++)
+        {
+            var t = index / (float)wireCount;
+            var position = Vector3.Lerp(start, end, t) + Vector3.up * 1.25f;
+            CreateVisualCube($"Wire_{index:000}", run, position, new Vector3(0.028f, 1.90f, 0.028f), wire);
+        }
+
+        // One continuous, invisible collider per fence side is robust for
+        // the forklift's CharacterController and avoids gaps between posts.
+        var blocker = new GameObject("Boundary_Collider");
+        blocker.transform.SetParent(run, false);
+        blocker.transform.position = centre + Vector3.up * 1.15f;
+        blocker.transform.rotation = rotation;
+        var collider = blocker.AddComponent<BoxCollider>();
+        collider.center = Vector3.zero;
+        collider.size = new Vector3(length, 2.30f, 0.18f);
+    }
+
+    private static void BuildParkingAreas(Transform parent, Material asphalt, Material paint)
+    {
+        var parking = new GameObject("Parking_Areas").transform;
+        parking.SetParent(parent, false);
+
+        // The lots sit beyond the fence, directly below the transverse road.
+        // A generous central corridor remains free for the factory entrance.
+        // Their outer edges meet the two side fence lines at X = -40 and
+        // X = +40, making the lots feel built directly against the perimeter.
+        CreateParkingArea(parking, "Parking_West", new Vector3(-29f, 0f, 25.75f), 22f, 7f, asphalt, paint);
+        CreateParkingArea(parking, "Parking_East", new Vector3(29f, 0f, 25.75f), 22f, 7f, asphalt, paint);
+    }
+
+    private static void CreateParkingArea(
+        Transform parent,
+        string name,
+        Vector3 centre,
+        float width,
+        float depth,
+        Material asphalt,
+        Material paint)
+    {
+        var lot = new GameObject(name).transform;
+        lot.SetParent(parent, false);
+        CreateVisualCube("Parking_Surface", lot, centre + Vector3.up * 0.008f, new Vector3(width, 0.006f, depth), asphalt);
+
+        var y = 0.016f;
+        var xMin = centre.x - width * 0.5f;
+        var xMax = centre.x + width * 0.5f;
+        var zMin = centre.z - depth * 0.5f;
+
+        // Both lots use this same world-space diagonal direction: every white
+        // marking slopes identically, instead of mirroring across the gate.
+        // The markings remain short and start away from the fence side.
+        for (var x = xMin + 1.10f; x < xMax - 1.10f; x += 4.85f)
+        {
+            var start = new Vector3(x, y + 0.002f, zMin + 0.55f);
+            var end = new Vector3(Mathf.Min(x + 2.15f, xMax - 0.45f), y + 0.002f, zMin + 4.10f);
+            CreateYardBeamBetween(lot, "Diagonal_Bay", start, end, 0.10f, paint);
+        }
+    }
+
+    private static void BuildYardProps(
+        Transform parent,
+        Material reelMaterial,
+        Material cableMaterial,
+        Material pipeMaterial,
+        Material woodMaterial,
+        Material cardboardMaterial,
+        Material barrelMaterial,
+        Material storageMaterial)
+    {
+        var props = new GameObject("Exterior_Industrial_Props").transform;
+        props.SetParent(parent, false);
+
+        // Keep the centre, truck route and the entire lower foreground empty.
+        // All utility objects live in compact side strips beside the halls.
+        // Each original group is now represented three times as often.
+        var reelZ = new[] { -10.5f, 1.0f, 13.0f };
+        var pipeZ = new[] { -7.5f, 4.0f, 15.5f };
+        var crateSlots = new[]
+        {
+            new Vector2(28.4f, -10.4f), new Vector2(28.4f, -3.3f), new Vector2(28.4f, 3.8f),
+            new Vector2(28.4f, 10.9f), new Vector2(30.7f, -7.0f), new Vector2(30.7f, 0.1f),
+            new Vector2(30.7f, 7.2f), new Vector2(30.7f, 14.3f), new Vector2(33.0f, 12.0f),
+        };
+        var palletSlots = new[]
+        {
+            new Vector2(33.2f, -10.7f), new Vector2(33.2f, -4.5f), new Vector2(33.2f, 1.7f),
+            new Vector2(33.2f, 7.9f), new Vector2(35.5f, -8.0f), new Vector2(35.5f, -1.8f),
+            new Vector2(35.5f, 4.4f), new Vector2(35.5f, 10.6f), new Vector2(37.8f, -5.2f),
+            new Vector2(37.8f, 1.0f), new Vector2(37.8f, 7.2f), new Vector2(37.8f, 13.4f),
+        };
+        var barrelSlots = new[]
+        {
+            new Vector2(38.5f, -10.7f), new Vector2(38.5f, -5.2f), new Vector2(38.5f, 0.3f),
+            new Vector2(38.5f, 5.8f), new Vector2(38.5f, 11.3f), new Vector2(36.3f, -8.0f),
+            new Vector2(36.3f, -2.5f), new Vector2(36.3f, 3.0f), new Vector2(36.3f, 8.5f),
+        };
+
+        for (var sideIndex = 0; sideIndex < 2; sideIndex++)
+        {
+            var side = sideIndex == 0 ? -1f : 1f;
+            var sideName = side < 0f ? "West" : "East";
+            for (var index = 0; index < reelZ.Length; index++)
+            {
+                CreateCableReel(props, $"Cable_Reel_{sideName}_{index + 1:00}", new Vector3(side * 37.2f, 0f, reelZ[index]), side * 24f, reelMaterial, cableMaterial);
+                CreatePipeBundle(props, $"Pipe_Bundle_{sideName}_{index + 1:00}", new Vector3(side * 34.5f, 0f, pipeZ[index]), 90f, pipeMaterial, storageMaterial);
+            }
+
+            for (var index = 0; index < crateSlots.Length; index++)
+            {
+                var slot = crateSlots[index];
+                CreateCrateStack(props, $"Crate_Stack_{sideName}_{index + 1:00}", new Vector3(side * slot.x, 0f, slot.y), index % 2 == 0, woodMaterial, cardboardMaterial);
+            }
+
+            for (var index = 0; index < palletSlots.Length; index++)
+            {
+                var slot = palletSlots[index];
+                CreatePalletLoad(props, $"Pallet_Load_{sideName}_{index + 1:00}", new Vector3(side * slot.x, 0f, slot.y), (index % 3) + 1, woodMaterial, cardboardMaterial);
+            }
+
+            for (var index = 0; index < barrelSlots.Length; index++)
+            {
+                var slot = barrelSlots[index];
+                CreateBarrelCluster(props, $"Barrel_Cluster_{sideName}_{index + 1:00}", new Vector3(side * slot.x, 0f, slot.y), barrelMaterial, storageMaterial);
+            }
+        }
+    }
+
+    private static void EnsureFactoryAudio(Transform factoryRoot)
+    {
+        var audioRoot = factoryRoot.Find("Factory_Audio");
+        if (audioRoot == null)
+        {
+            audioRoot = new GameObject("Factory_Audio").transform;
+            audioRoot.SetParent(factoryRoot, false);
+            Undo.RegisterCreatedObjectUndo(audioRoot.gameObject, "Add factory audio");
+        }
+
+        var controller = audioRoot.GetComponent<FactoryAudioController>();
+        if (controller == null)
+        {
+            controller = Undo.AddComponent<FactoryAudioController>(audioRoot.gameObject);
+        }
+
+        controller.playAmbientMusic = true;
+        controller.ambientVolume = 0.045f;
+        controller.packageCatchVolume = 0.16f;
+        controller.packageDropVolume = 0.22f;
+        controller.truckLoadVolume = 0.24f;
+        controller.truckEngineVolume = 0.42f;
+        controller.truckReverseBeepVolume = 0.22f;
+        EditorUtility.SetDirty(controller);
+    }
+
+    private static void CreateCableReel(
+        Transform parent,
+        string name,
+        Vector3 position,
+        float yaw,
+        Material reelMaterial,
+        Material cableMaterial)
+    {
+        var reel = new GameObject(name).transform;
+        reel.SetParent(parent, false);
+        var rotation = Quaternion.Euler(0f, yaw, 0f) * Quaternion.Euler(0f, 0f, 90f);
+        var centre = position + Vector3.up * 0.88f;
+
+        CreateYardCylinder(reel, "Cable_Coil", centre, new Vector3(1.16f, 0.48f, 1.16f), rotation, cableMaterial);
+        var axleDirection = rotation * Vector3.up;
+        CreateYardCylinder(reel, "Flange_Left", centre - axleDirection * 0.54f, new Vector3(1.55f, 0.11f, 1.55f), rotation, reelMaterial);
+        CreateYardCylinder(reel, "Flange_Right", centre + axleDirection * 0.54f, new Vector3(1.55f, 0.11f, 1.55f), rotation, reelMaterial);
+        CreateYardCylinder(reel, "Hub", centre, new Vector3(0.44f, 0.68f, 0.44f), rotation, reelMaterial);
+    }
+
+    private static void CreatePipeBundle(
+        Transform parent,
+        string name,
+        Vector3 position,
+        float yaw,
+        Material pipeMaterial,
+        Material bracketMaterial)
+    {
+        var bundle = new GameObject(name).transform;
+        bundle.SetParent(parent, false);
+        var rotation = Quaternion.Euler(0f, yaw, 0f) * Quaternion.Euler(90f, 0f, 0f);
+        var across = Quaternion.Euler(0f, yaw, 0f) * Vector3.right;
+        var up = Vector3.up;
+        for (var row = 0; row < 2; row++)
+        {
+            for (var column = 0; column < 3; column++)
+            {
+                var pipePosition = position + across * ((column - 1) * 0.34f) + up * (0.22f + row * 0.31f);
+                CreateYardCylinder(bundle, $"Pipe_{row}_{column}", pipePosition, new Vector3(0.24f, 2.20f, 0.24f), rotation, pipeMaterial);
+            }
+        }
+
+        var lengthDirection = rotation * Vector3.up;
+        foreach (var distance in new[] { -1.10f, 1.10f })
+        {
+            var supportPosition = position + lengthDirection * distance + Vector3.up * 0.36f;
+            CreateYardBeam(bundle, "Pipe_Strap", supportPosition, new Vector3(1.35f, 0.10f, 0.14f), Quaternion.Euler(0f, yaw, 0f), bracketMaterial);
+        }
+    }
+
+    private static void CreateCrateStack(
+        Transform parent,
+        string name,
+        Vector3 position,
+        bool tall,
+        Material woodMaterial,
+        Material cardboardMaterial)
+    {
+        var stack = new GameObject(name).transform;
+        stack.SetParent(parent, false);
+        CreateVisualCube("Pallet_Base", stack, position + Vector3.up * 0.10f, new Vector3(1.70f, 0.20f, 1.25f), woodMaterial);
+        CreateVisualCube("Carton_A", stack, position + new Vector3(-0.35f, 0.46f, -0.12f), new Vector3(0.82f, 0.55f, 0.78f), cardboardMaterial);
+        CreateVisualCube("Carton_B", stack, position + new Vector3(0.42f, 0.43f, 0.14f), new Vector3(0.64f, 0.50f, 0.70f), cardboardMaterial);
+        if (tall)
+        {
+            CreateVisualCube("Carton_Top", stack, position + new Vector3(-0.02f, 0.99f, 0.03f), new Vector3(0.88f, 0.50f, 0.70f), cardboardMaterial);
+        }
+    }
+
+    private static void CreatePalletLoad(
+        Transform parent,
+        string name,
+        Vector3 position,
+        int layers,
+        Material woodMaterial,
+        Material cardboardMaterial)
+    {
+        var pallet = new GameObject(name).transform;
+        pallet.SetParent(parent, false);
+        CreateVisualCube("Pallet", pallet, position + Vector3.up * 0.09f, new Vector3(1.40f, 0.18f, 1.05f), woodMaterial);
+        for (var layer = 0; layer < layers; layer++)
+        {
+            CreateVisualCube(
+                $"Pallet_Carton_{layer + 1}",
+                pallet,
+                position + new Vector3(0f, 0.37f + layer * 0.42f, 0f),
+                new Vector3(1.12f, 0.38f, 0.82f),
+                cardboardMaterial);
+        }
+    }
+
+    private static void CreateBarrelCluster(
+        Transform parent,
+        string name,
+        Vector3 position,
+        Material barrelMaterial,
+        Material storageMaterial)
+    {
+        var cluster = new GameObject(name).transform;
+        cluster.SetParent(parent, false);
+        var offsets = new[]
+        {
+            new Vector3(-0.28f, 0f, -0.24f), new Vector3(0.30f, 0f, -0.18f), new Vector3(0.02f, 0f, 0.32f),
+        };
+        for (var index = 0; index < offsets.Length; index++)
+        {
+            CreateYardCylinder(cluster, $"Drum_{index + 1}", position + offsets[index] + Vector3.up * 0.52f, new Vector3(0.48f, 0.52f, 0.48f), Quaternion.identity, barrelMaterial);
+        }
+
+        CreateVisualCube("Drum_Platform", cluster, position + Vector3.up * 0.06f, new Vector3(1.40f, 0.12f, 1.22f), storageMaterial);
+    }
+
+    private static void CreateYardBeam(Transform parent, string name, Vector3 position, Vector3 size, Quaternion rotation, Material material)
+    {
+        var beam = CreateVisualCube(name, parent, position, size, material);
+        beam.transform.rotation = rotation;
+    }
+
+    private static void CreateYardBeamBetween(Transform parent, string name, Vector3 start, Vector3 end, float width, Material material)
+    {
+        var direction = end - start;
+        direction.y = 0f;
+        var length = direction.magnitude;
+        if (length < 0.01f)
+        {
+            return;
+        }
+
+        CreateYardBeam(
+            parent,
+            name,
+            (start + end) * 0.5f,
+            new Vector3(length, 0.012f, width),
+            Quaternion.FromToRotation(Vector3.right, direction.normalized),
+            material);
+    }
+
+    private static void CreateYardCylinder(Transform parent, string name, Vector3 position, Vector3 scale, Quaternion rotation, Material material)
+    {
+        var cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        cylinder.name = name;
+        cylinder.transform.SetParent(parent, false);
+        cylinder.transform.position = position;
+        cylinder.transform.rotation = rotation;
+        cylinder.transform.localScale = scale;
+        cylinder.GetComponent<MeshRenderer>().sharedMaterial = material;
+        var collider = cylinder.GetComponent<Collider>();
+        if (collider != null)
+        {
+            Object.DestroyImmediate(collider);
+        }
+    }
+
     private static void BuildEnvironment(
         Transform root,
         Material concrete,

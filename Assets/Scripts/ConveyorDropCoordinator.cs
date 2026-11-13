@@ -9,7 +9,6 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public sealed class ConveyorDropCoordinator : MonoBehaviour
 {
-    private const float InitialDispatchDelay = 0.6f;
     private const float SchedulingHorizon = 45f;
     private const float DispatchSchedulingTolerance = 0.02f;
     // Accounts for frame quantisation while keeping the actual fall gap safely
@@ -333,11 +332,11 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
         float fallTime;
         if (!hasSchedule)
         {
-            // Reserve enough lead time for a longer route to depart before
-            // this first, short-route parcel when it must arrive later. The
-            // first parcel to *fall* is still on the shorter route.
-            fallTime = Time.time + GetLongestValidRouteTravelTime() + InitialDispatchDelay;
-            dispatchTime = fallTime - travelTime;
+            // The title overlay starts in Awake, before this coordinator
+            // reaches Start. Send the first (short-route) parcel immediately
+            // so it begins moving while the introductory title is visible.
+            dispatchTime = Time.time;
+            fallTime = dispatchTime + travelTime;
         }
         else
         {
@@ -437,30 +436,6 @@ public sealed class ConveyorDropCoordinator : MonoBehaviour
 
         dispatchTime = candidate;
         return true;
-    }
-
-    private float GetLongestValidRouteTravelTime()
-    {
-        var longestTravelTime = 0f;
-        AddLongestTravelTime(leftSpawner, ConveyorBranch.A, ref longestTravelTime);
-        AddLongestTravelTime(leftSpawner, ConveyorBranch.B, ref longestTravelTime);
-        AddLongestTravelTime(rightSpawner, ConveyorBranch.A, ref longestTravelTime);
-        AddLongestTravelTime(rightSpawner, ConveyorBranch.B, ref longestTravelTime);
-        return longestTravelTime;
-    }
-
-    private static void AddLongestTravelTime(
-        ConveyorBoxSpawner spawner,
-        ConveyorBranch branch,
-        ref float longestTravelTime)
-    {
-        if (spawner == null || !spawner.HasValidPath(branch))
-        {
-            return;
-        }
-
-        var path = branch == ConveyorBranch.A ? spawner.branchPathA : spawner.branchPathB;
-        longestTravelTime = Mathf.Max(longestTravelTime, spawner.GetTravelTime(path));
     }
 
     /// <summary>

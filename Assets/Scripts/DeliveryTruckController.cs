@@ -8,6 +8,7 @@ using UnityEngine;
 public sealed class DeliveryTruckController : MonoBehaviour
 {
     private const float VehicleSpeedMultiplier = 1.5f;
+    private const float ReverseSpeedFactor = 0.8f;
 
     public ConveyorDropCoordinator coordinator;
     public ForkliftLoadArea forkliftLoad;
@@ -45,6 +46,12 @@ public sealed class DeliveryTruckController : MonoBehaviour
     public float gateSpeed = 2.2f;
     [Tooltip("Maximum horizontal distance of the forklift's load from the accessible side of the cargo bed.")]
     public float loadingDistance = 1f;
+    [Tooltip("Larger approach zone in which a loaded forklift raises its tines for the truck.")]
+    [Min(0.01f)] public float forkliftLiftZoneDistance = 2.4f;
+    [Tooltip("Extra distance added only on the accessible left side of the cargo bed while the forks are raised.")]
+    [Min(0f)] public float forkliftLiftZoneLeftExtension = 1f;
+    [Tooltip("How long the truck remains covered after coming to a complete stop before the tarp and side lettering are hidden.")]
+    [Min(0f)] public float cargoPresentationHideDelay = 1f;
 
     private Vector3 gateClosedScale;
     private Vector3 gateClosedPosition;
@@ -52,6 +59,7 @@ public sealed class DeliveryTruckController : MonoBehaviour
     private Collider gateCollider;
     private State state;
     private float loadingTimer;
+    private float cargoPresentationTimer;
     private RouteCurve activeCurve;
     private Vector3 curveStart;
     private Vector3 curveControlA;
@@ -61,6 +69,8 @@ public sealed class DeliveryTruckController : MonoBehaviour
     private Quaternion curveEndRotation;
     private float curveElapsed;
     private float curveDuration;
+    private Bounds cargoSideLocalBounds;
+    private bool hasCargoSideLocalBounds;
 
     /// <summary>
     /// The packages are re-parented from the forks to the truck when loading
@@ -82,6 +92,7 @@ public sealed class DeliveryTruckController : MonoBehaviour
         Opening,
         EnteringGate,
         Parking,
+        RevealingCargo,
         WaitingForForklift,
         Loading,
         ReversingTurn,
@@ -104,9 +115,10 @@ public sealed class DeliveryTruckController : MonoBehaviour
         // Only the automatic delivery truck is sped up here. The forklift is
         // controlled by its own level-based movement system.
         driveSpeed *= VehicleSpeedMultiplier;
-        reverseSpeed *= VehicleSpeedMultiplier;
+        reverseSpeed *= VehicleSpeedMultiplier * ReverseSpeedFactor;
         EnsureTruckVisible();
         SetCargoPresentation(true);
+        CacheCargoSideBounds();
 
         if (gate != null)
         {
@@ -119,6 +131,8 @@ public sealed class DeliveryTruckController : MonoBehaviour
 
     private void Update()
     {
+        UpdateTruckMotionSound();
+
         switch (state)
         {
             case State.Waiting:
@@ -171,21 +185,41 @@ public sealed class DeliveryTruckController : MonoBehaviour
                         driveSpeed,
                         true))
                 {
-                    // The open cargo bed is visible as soon as the vehicle
-                    // stops, so the player can place the fork load beside it.
+                    // Keep the tarp and side lettering on the motionless
+                    // truck for one second, then reveal the cargo bed.
+                    cargoPresentationTimer = Mathf.Max(0f, cargoPresentationHideDelay);
+                    state = State.RevealingCargo;
+                }
+                break;
+            case State.RevealingCargo:
+                cargoPresentationTimer -= Time.deltaTime;
+                if (cargoPresentationTimer <= 0f)
+                {
                     SetCargoPresentation(false);
                     state = State.WaitingForForklift;
                 }
                 break;
             case State.WaitingForForklift:
-                if (CanLoadForklift())
+            {
+                var shouldRaiseForks = IsForkliftInsideLiftZone();
+                if (forkliftLoad != null)
+                {
+                    forkliftLoad.SetTruckLoadingLift(shouldRaiseForks);
+                }
+
+                // The forklift must complete its one-second lift before the
+                // boxes are moved into the cargo bed. The actual transfer
+                // still requires the tighter one-metre loading distance.
+                if (CanLoadForklift() && forkliftLoad != null && forkliftLoad.IsAtTruckLoadingHeight)
                 {
                     LoadedPackageCount = forkliftLoad.LoadedPackageCount;
                     LoadForkliftPackages();
+                    forkliftLoad.SetTruckLoadingLift(false);
                     loadingTimer = 2.0f;
                     state = State.Loading;
                 }
                 break;
+            }
             case State.Loading:
                 loadingTimer -= Time.deltaTime;
                 if (loadingTimer <= 0f)
@@ -195,21 +229,26 @@ public sealed class DeliveryTruckController : MonoBehaviour
                 }
                 break;
             case State.ReversingTurn:
-                // Moving from the left parking stop toward +X/+Z is backward
-                // for the initially angled cab. Simultaneously turn the root
-                // so the cab ultimately faces north (+Z) for the forward exit.
+            {
+                // Keep the cab facing opposite to the last portion of the
+                // yellow reversing curve. The vehicle now begins its turn to
+                // the green exit path only while it is already driving out,
+                // instead of briefly pointing toward +Z at the end of reverse.
+                var reverseControlA = Vector3.Lerp(loadingStopPosition, reverseTurnPosition, 0.24f) + new Vector3(0f, 0f, -0.55f);
+                var reverseControlB = Vector3.Lerp(loadingStopPosition, reverseTurnPosition, 0.76f) + new Vector3(0f, 0f, 0.15f);
                 if (MoveAlongCurve(
                         RouteCurve.Reverse,
-                        Vector3.Lerp(loadingStopPosition, reverseTurnPosition, 0.24f) + new Vector3(0f, 0f, -0.55f),
-                        Vector3.Lerp(loadingStopPosition, reverseTurnPosition, 0.76f) + new Vector3(0f, 0f, 0.15f),
+                        reverseControlA,
+                        reverseControlB,
                         reverseTurnPosition,
-                        180f,
+                        GetReverseEndYaw(reverseControlB),
                         reverseSpeed,
                         false))
                 {
                     state = State.ExitingCourtyard;
                 }
                 break;
+            }
             case State.ExitingCourtyard:
                 // The final green arc moves back to the centre of the gate
                 // before the truck drives out in a straight, safe line.
@@ -239,6 +278,31 @@ public sealed class DeliveryTruckController : MonoBehaviour
                         outcomeOverlay.ShowResult(LoadedPackageCount >= outcomeOverlay.requiredLoadedPackages);
                     }
                 }
+                break;
+        }
+    }
+
+    private void OnDisable()
+    {
+        FactoryAudioController.StopTruckMotion();
+    }
+
+    private void UpdateTruckMotionSound()
+    {
+        switch (state)
+        {
+            case State.EnteringGate:
+            case State.Parking:
+            case State.ExitingCourtyard:
+            case State.Leaving:
+            case State.Opening:
+                FactoryAudioController.SetTruckMotion(TruckMotion.Forward);
+                break;
+            case State.ReversingTurn:
+                FactoryAudioController.SetTruckMotion(TruckMotion.Reverse);
+                break;
+            default:
+                FactoryAudioController.StopTruckMotion();
                 break;
         }
     }
@@ -354,6 +418,19 @@ public sealed class DeliveryTruckController : MonoBehaviour
         return Quaternion.Euler(0f, yaw, 0f) * Vector3.back;
     }
 
+    private float GetReverseEndYaw(Vector3 reverseControlB)
+    {
+        var finalTravelDirection = reverseTurnPosition - reverseControlB;
+        if (finalTravelDirection.sqrMagnitude < 0.0001f)
+        {
+            return loadingStopYaw;
+        }
+
+        // The cab points along local -Z. Root +Z therefore points in the
+        // opposite direction while the vehicle is reversing.
+        return Quaternion.LookRotation(finalTravelDirection.normalized, Vector3.up).eulerAngles.y;
+    }
+
     private void EnsureTruckVisible()
     {
         if (truckVisual == null)
@@ -404,6 +481,17 @@ public sealed class DeliveryTruckController : MonoBehaviour
 
     private bool CanLoadForklift()
     {
+        return IsForkliftWithinDistance(loadingDistance);
+    }
+
+    private bool IsForkliftInsideLiftZone()
+    {
+        return forkliftLoad != null && forkliftLoad.LoadedPackageCount > 0 &&
+               IsForkliftWithinDistance(forkliftLiftZoneDistance + forkliftLiftZoneLeftExtension);
+    }
+
+    private bool IsForkliftWithinDistance(float maximumDistance)
+    {
         if (forkliftLoad == null || forkliftLoad.LoadedPackageCount <= 0)
         {
             return false;
@@ -412,13 +500,136 @@ public sealed class DeliveryTruckController : MonoBehaviour
         var forkLoadPosition = forkliftLoad.loadAnchor != null
             ? forkliftLoad.loadAnchor.position
             : forkliftLoad.transform.position;
-        var cargoSidePosition = loadingPoint != null
-            ? loadingPoint.position
-            : cargoAnchor != null ? cargoAnchor.position : transform.position;
+        if (!TryGetCargoSideLocalBounds(out var cargoBounds))
+        {
+            // Keep the original point-distance behaviour as a safe fallback
+            // when a different truck model does not include a cargo mesh.
+            var cargoSidePosition = loadingPoint != null
+                ? loadingPoint.position
+                : cargoAnchor != null ? cargoAnchor.position : transform.position;
+            forkLoadPosition.y = 0f;
+            cargoSidePosition.y = 0f;
+            return Vector3.Distance(forkLoadPosition, cargoSidePosition) <= Mathf.Max(0.01f, maximumDistance);
+        }
 
-        forkLoadPosition.y = 0f;
-        cargoSidePosition.y = 0f;
-        return Vector3.Distance(forkLoadPosition, cargoSidePosition) <= loadingDistance;
+        // The strip follows the actual cargo bed rather than a fixed world
+        // radius. It consequently retains the correct size if the truck is
+        // manually resized or rotated in Unity.
+        var localForkPosition = transform.InverseTransformPoint(forkLoadPosition);
+        var localLoadingPoint = loadingPoint != null
+            ? transform.InverseTransformPoint(loadingPoint.position)
+            : cargoBounds.center + Vector3.right * cargoBounds.extents.x;
+        var accessibleSideIsPositiveX = localLoadingPoint.x >= cargoBounds.center.x;
+        var sidePlaneX = accessibleSideIsPositiveX ? cargoBounds.max.x : cargoBounds.min.x;
+        var signedOutwardDistance = accessibleSideIsPositiveX
+            ? localForkPosition.x - sidePlaneX
+            : sidePlaneX - localForkPosition.x;
+
+        // A short inner allowance lets the fork tips reach just over the
+        // truck side, while the vehicle itself remains solid to the forklift.
+        const float insideCargoAllowance = 0.45f;
+        var liesBesideAccessibleSide = signedOutwardDistance >= -insideCargoAllowance &&
+                                       signedOutwardDistance <= Mathf.Max(0.01f, maximumDistance);
+        var liesAlongCargoLength = localForkPosition.z >= cargoBounds.min.z &&
+                                   localForkPosition.z <= cargoBounds.max.z;
+        return liesBesideAccessibleSide && liesAlongCargoLength;
+    }
+
+    private void CacheCargoSideBounds()
+    {
+        hasCargoSideLocalBounds = false;
+        TryGetCargoSideLocalBounds(out _);
+    }
+
+    private bool TryGetCargoSideLocalBounds(out Bounds localBounds)
+    {
+        if (hasCargoSideLocalBounds)
+        {
+            localBounds = cargoSideLocalBounds;
+            return true;
+        }
+
+        var cargoBase = FindDescendant(truckVisual, "Cargo_Base");
+        if (cargoBase != null && TryGetLocalBounds(cargoBase, out localBounds))
+        {
+            cargoSideLocalBounds = localBounds;
+            hasCargoSideLocalBounds = true;
+            return true;
+        }
+
+        // A BoxCollider already exists on the truck root and tracks the
+        // current Unity-side vehicle dimensions. It is a robust fallback for
+        // replacement models that do not expose Cargo_Base.
+        var truckCollider = GetComponent<BoxCollider>();
+        if (truckCollider != null)
+        {
+            localBounds = new Bounds(truckCollider.center, truckCollider.size);
+            cargoSideLocalBounds = localBounds;
+            hasCargoSideLocalBounds = true;
+            return true;
+        }
+
+        localBounds = default;
+        return false;
+    }
+
+    private bool TryGetLocalBounds(Transform root, out Bounds localBounds)
+    {
+        var hasBounds = false;
+        localBounds = default;
+        if (root == null)
+        {
+            return false;
+        }
+
+        foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+        {
+            var rendererBounds = renderer.localBounds;
+            for (var x = 0; x < 2; x++)
+            {
+                for (var y = 0; y < 2; y++)
+                {
+                    for (var z = 0; z < 2; z++)
+                    {
+                        var localCorner = new Vector3(
+                            x == 0 ? rendererBounds.min.x : rendererBounds.max.x,
+                            y == 0 ? rendererBounds.min.y : rendererBounds.max.y,
+                            z == 0 ? rendererBounds.min.z : rendererBounds.max.z);
+                        var truckLocalCorner = transform.InverseTransformPoint(
+                            renderer.transform.TransformPoint(localCorner));
+                        if (!hasBounds)
+                        {
+                            localBounds = new Bounds(truckLocalCorner, Vector3.zero);
+                            hasBounds = true;
+                        }
+                        else
+                        {
+                            localBounds.Encapsulate(truckLocalCorner);
+                        }
+                    }
+                }
+            }
+        }
+
+        return hasBounds;
+    }
+
+    private static Transform FindDescendant(Transform root, string targetName)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        foreach (var candidate in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (candidate.name == targetName)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private void LoadForkliftPackages()
@@ -435,6 +646,12 @@ public sealed class DeliveryTruckController : MonoBehaviour
             package.localPosition = new Vector3((column - 1) * 0.58f, 0.18f + layer * 0.38f, (row - 0.5f) * 0.78f);
             package.localRotation = Quaternion.identity;
         }
+
+        FactoryAudioController.PlayTruckLoaded();
+
+        // The full-load reward is intentionally triggered only after the
+        // boxes have physically left the forklift and reached the truck.
+        forkliftLoad.CelebrateFullLoadAfterTransfer();
     }
 
     private void OnDrawGizmosSelected()
