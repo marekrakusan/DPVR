@@ -20,11 +20,20 @@ public static class FactoryYardBuilder
     private const float ConveyorScale = 100f;
     // Shared façade values keep regenerated details consistent with the yard.
     private const float GabledRoofRise = 1.75f;
+    // Keep the hip connector and its flashing visibly above the main roof at
+    // the point where the side halls meet it. Without this, the front half
+    // of the diagonal trim can sit inside the main roof after its depth was
+    // increased.
+    private const float SideRoofJunctionSurfaceLift = 0.04f;
+    private const float SideRoofJunctionTrimLift = 0.13f;
     private static readonly Color FactoryWallColor = new Color(0.98f, 0.60f, 0.025f);
     private static readonly Color FactoryWallGrooveColor = new Color(0.72f, 0.36f, 0.012f);
-    private static readonly Color RoofPanelColor = new Color(0.55f, 0.59f, 0.66f);
-    private static readonly Color RoofSeamColor = new Color(0.40f, 0.45f, 0.52f);
-    private static readonly Color RoofRidgeColor = new Color(0.25f, 0.29f, 0.35f);
+    // Keep the complete roof treatment in one light-grey family.  These
+    // materials are unlit so the two roof slopes do not appear to change
+    // from light grey at the ridge to dark grey at their outer edges.
+    private static readonly Color RoofPanelColor = new Color(0.43f, 0.47f, 0.54f);
+    private static readonly Color RoofSeamColor = new Color(0.38f, 0.42f, 0.49f);
+    private static readonly Color RoofRidgeColor = new Color(0.32f, 0.36f, 0.43f);
     private static readonly Color SafetyYellowColor = new Color(0.98f, 0.66f, 0.03f);
     private static readonly Color SafetyBlackColor = new Color(0.035f, 0.045f, 0.055f);
 
@@ -54,7 +63,7 @@ public static class FactoryYardBuilder
 
         var concrete = GetMaterial("Concrete", new Color(0.39f, 0.42f, 0.44f), 0.72f, 0f);
         var hallYellow = GetMaterial("Factory_Yellow", FactoryWallColor, 0.42f, 0.05f);
-        var roofGray = GetMaterial("Roof_Gray", RoofPanelColor, 0.42f, 0.2f);
+        var roofGray = GetUniformRoofMaterial("Roof_Gray", RoofPanelColor);
         var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
         var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
         var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
@@ -160,23 +169,137 @@ public static class FactoryYardBuilder
         EnsureFolder("Assets/FactoryYard");
         EnsureFolder(MaterialFolder);
         var hallYellow = GetMaterial("Factory_Yellow", FactoryWallColor, 0.42f, 0.05f);
-        var roofGray = GetMaterial("Roof_Gray", RoofPanelColor, 0.42f, 0.2f);
+        var roofGray = GetUniformRoofMaterial("Roof_Gray", RoofPanelColor);
         var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
         var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
         var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
-        var safetyYellow = GetMaterial("Safety_Yellow", SafetyYellowColor, 0.35f, 0.1f);
-        var safetyBlack = GetMaterial("Safety_Black", SafetyBlackColor, 0.30f, 0.05f);
 
         EnsureOpaqueBuildingMaterial(hallYellow);
         EnsureOpaqueBuildingMaterial(roofGray);
         ApplyBuildingFacadeMaterials(environment, hallYellow, roofGray);
         AddBuildingDetails(environment, roofGray, dark, frame, skylight);
-        EnsureMainGateSafetyFrames(environment, safetyYellow, safetyBlack);
+        // Deliberately leave the main-gate safety frames untouched: their
+        // visual treatment is manually maintained in the current scene.
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(root.scene);
         EditorSceneManager.SaveScene(root.scene);
         Selection.activeGameObject = environment.gameObject;
-        Debug.Log("Upgraded the factory façades, roofs, skylights and main-gate safety frames.");
+        Debug.Log("Upgraded the factory façades, roofs, skylights and side-hall doors.");
+    }
+
+    /// <summary>
+    /// Restores only the agreed main-hall window layout. Unlike the complete
+    /// façade update, this command preserves every other manually adjusted
+    /// building element in the open scene.
+    /// </summary>
+    [MenuItem("Factory/Restore Main Hall Window Alignment")]
+    private static void RestoreMainHallWindowAlignment()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before aligning the windows.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var environment = root != null ? root.transform.Find("Environment") : null;
+        var mainHall = environment != null ? environment.Find("North_Main_Hall") : null;
+        var walls = mainHall != null ? mainHall.Find("Walls") : null;
+        var wallRenderer = walls != null ? walls.GetComponent<Renderer>() : null;
+        if (root == null || mainHall == null || wallRenderer == null)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        var panelWidth = Mathf.Min(3.15f, wallRenderer.bounds.size.x * 0.085f);
+        var targets = GetMainFrontWindowOffsets(wallRenderer.bounds.size, panelWidth);
+        var windows = new List<Transform>();
+        foreach (var candidate in mainHall.GetComponentsInChildren<Transform>(true))
+        {
+            if (candidate.name == "Front_Window" && candidate.gameObject.activeInHierarchy && candidate.Find("Glass") != null)
+            {
+                windows.Add(candidate);
+            }
+        }
+
+        windows.Sort((left, right) =>
+        {
+            var leftGlass = left.Find("Glass")?.GetComponent<Renderer>();
+            var rightGlass = right.Find("Glass")?.GetComponent<Renderer>();
+            return (leftGlass != null ? leftGlass.bounds.center.x : 0f)
+                .CompareTo(rightGlass != null ? rightGlass.bounds.center.x : 0f);
+        });
+
+        if (windows.Count != targets.Length)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "The four current main-hall windows could not be found.", "OK");
+            return;
+        }
+
+        for (var index = 0; index < windows.Count; index++)
+        {
+            var glassRenderer = windows[index].Find("Glass")?.GetComponent<Renderer>();
+            if (glassRenderer == null)
+            {
+                continue;
+            }
+
+            var targetX = wallRenderer.bounds.center.x + targets[index];
+            windows[index].position += new Vector3(targetX - glassRenderer.bounds.center.x, 0f, 0f);
+        }
+
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = mainHall.gameObject;
+        Debug.Log("Restored the main-hall windows to the package-exit alignment.");
+    }
+
+    /// <summary>
+    /// Re-fits only the two short hip sections where the side roofs meet the
+    /// main hall. It deliberately leaves all other building details and
+    /// user-positioned scene objects untouched.
+    /// </summary>
+    [MenuItem("Factory/Refit Side Roof Junctions")]
+    private static void RefitSideRoofJunctions()
+    {
+        if (Application.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Stop Play mode before refitting the roof junctions.", "OK");
+            return;
+        }
+
+        var root = GameObject.Find("Factory_Yard");
+        var environment = root != null ? root.transform.Find("Environment") : null;
+        if (root == null || environment == null || !TryGetMainHallWallBounds(environment, out var mainWallBounds))
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "Open the FactoryYard scene first.", "OK");
+            return;
+        }
+
+        var updated = 0;
+        foreach (var hallName in new[] { "West_Hall", "East_Hall" })
+        {
+            var hall = environment.Find(hallName);
+            var walls = hall != null ? hall.Find("Walls") : null;
+            var wallRenderer = walls != null ? walls.GetComponent<Renderer>() : null;
+            var connector = FindActiveSideRoofHipConnection(hall);
+            if (wallRenderer != null && connector != null && RefitSideRoofHipConnection(connector, wallRenderer.bounds, mainWallBounds))
+            {
+                updated++;
+            }
+        }
+
+        if (updated == 0)
+        {
+            EditorUtility.DisplayDialog("Factory Yard", "The current side-roof junctions could not be found.", "OK");
+            return;
+        }
+
+        EditorSceneManager.MarkSceneDirty(root.scene);
+        EditorSceneManager.SaveScene(root.scene);
+        Selection.activeGameObject = environment.gameObject;
+        Debug.Log("Refitted the side-roof junctions so their flashing stays visible above the main roof.");
     }
 
     /// <summary>
@@ -204,7 +327,7 @@ public static class FactoryYardBuilder
         EnsureFolder("Assets/FactoryYard");
         EnsureFolder(MaterialFolder);
         var hallYellow = GetMaterial("Factory_Yellow", FactoryWallColor, 0.42f, 0.05f);
-        var roofGray = GetMaterial("Roof_Gray", RoofPanelColor, 0.42f, 0.2f);
+        var roofGray = GetUniformRoofMaterial("Roof_Gray", RoofPanelColor);
         var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
         var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
         var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
@@ -270,7 +393,7 @@ public static class FactoryYardBuilder
 
         EnsureFolder("Assets/FactoryYard");
         EnsureFolder(MaterialFolder);
-        var roofGray = GetMaterial("Roof_Gray", RoofPanelColor, 0.42f, 0.2f);
+        var roofGray = GetUniformRoofMaterial("Roof_Gray", RoofPanelColor);
         var dark = GetMaterial("Door_And_Window", new Color(0.035f, 0.045f, 0.055f), 0.30f, 0.1f);
         var frame = GetMaterial("Window_Frame", new Color(0.47f, 0.51f, 0.55f), 0.35f, 0.45f);
         var skylight = GetMaterial("Skylight_Glass", new Color(0.52f, 0.68f, 0.78f), 0.88f, 0.12f);
@@ -992,8 +1115,8 @@ public static class FactoryYardBuilder
         // their current wall bounds instead of relying on the dimensions used
         // when the factory was first created.
         var wallGroove = GetMaterial("Factory_Wall_Groove", FactoryWallGrooveColor, 0.30f, 0.04f);
-        var roofSeam = GetMaterial("Roof_Corrugation", RoofSeamColor, 0.48f, 0.28f);
-        var roofRidge = GetMaterial("Roof_Ridge", RoofRidgeColor, 0.52f, 0.38f);
+        var roofSeam = GetUniformRoofMaterial("Roof_Corrugation", RoofSeamColor);
+        var roofRidge = GetUniformRoofMaterial("Roof_Ridge", RoofRidgeColor);
         var sideDoor = GetMaterial("Side_Hall_Metal_Door", new Color(0.12f, 0.16f, 0.20f), 0.50f, 0.75f);
         var sideDoorRib = GetMaterial("Side_Hall_Door_Rib", new Color(0.26f, 0.31f, 0.36f), 0.48f, 0.58f);
         UpgradeHallExterior(environment.Find("North_Main_Hall"), roof, roofSeam, roofRidge, wallGroove, window, frame, skylight, sideDoor, sideDoorRib);
@@ -1130,6 +1253,14 @@ public static class FactoryYardBuilder
         var position = wallBounds.center;
         var size = wallBounds.size;
         var ridgeAlongX = size.x >= size.z;
+        // The side halls may have a different wall height from the main hall.
+        // Their roof ridge is fitted to the same world-space height so the
+        // three roofs meet at one consistent top level.
+        var roofRise = GetRoofRiseForHall(hall, wallBounds, ridgeAlongX);
+        // The side halls connect to the main roof with a short hip section.
+        // Its tip lands on the main ridge instead of extending the side-hall
+        // ridge straight through the main roof.
+        var sideRoofConnectionDirection = GetSideRoofConnectionDirection(hall, wallBounds, ridgeAlongX);
 
         // Preserve every earlier generated revision for undo/history, but show
         // only the version fitted to the current hall geometry.
@@ -1150,32 +1281,43 @@ public static class FactoryYardBuilder
 
         var details = new GameObject("Exterior_Upgrade_CurrentFit").transform;
         details.SetParent(hall, false);
-        CreateGabledRoof("Gabled_Roof", details, wallBounds, ridgeAlongX, roof);
+        CreateGabledRoof("Gabled_Roof", details, wallBounds, ridgeAlongX, roofRise, sideRoofConnectionDirection, roof);
         AddWallCorrugation(details, wallBounds, ridgeAlongX, wallGroove);
-        AddRoofSurfaceDetails(details, wallBounds, ridgeAlongX, roofSeam, roofRidge);
+        AddRoofSurfaceDetails(details, wallBounds, ridgeAlongX, roofRise, roofSeam, roofRidge);
 
         if (ridgeAlongX)
         {
             AddFrontWindows(details, position, size, window, frame);
-            AddMainRoofSkylights(details, wallBounds, skylight, frame);
+            AddMainRoofSkylights(details, hall.parent, wallBounds, roofRise, skylight, frame);
         }
         else
         {
             var inwardSide = position.x < 0f ? 1f : -1f;
             AddSideWindows(details, position, size, window, frame);
-            AddSideRoofSkylights(details, wallBounds, inwardSide, skylight, frame);
+            AddSideRoofSkylights(details, wallBounds, roofRise, inwardSide, skylight, frame);
             AddSideHallFrontDoor(details, wallBounds, sideDoor, sideDoorRib, frame);
+
+            if (sideRoofConnectionDirection == 1 && TryGetMainHallWallBounds(hall.parent, out var mainWallBounds))
+            {
+                AddSideRoofHipConnection(
+                    details,
+                    wallBounds,
+                    mainWallBounds,
+                    wallBounds.max.z + 0.32f,
+                    roof,
+                    roofRidge);
+            }
         }
     }
 
-    private static void CreateGabledRoof(string name, Transform parent, Bounds wallBounds, bool ridgeAlongX, Material material)
+    private static void CreateGabledRoof(string name, Transform parent, Bounds wallBounds, bool ridgeAlongX, float roofRise, int openGableEnd, Material material)
     {
         var halfX = wallBounds.extents.x + 0.32f;
         var halfZ = wallBounds.extents.z + 0.32f;
         // Keep the mesh local to an origin on the real top edge of the walls.
         // This avoids inheriting an outdated hall-root position or height.
         const float eaveY = 0f;
-        var ridgeY = GabledRoofRise;
+        var ridgeY = roofRise;
         var vertices = ridgeAlongX
             ? new[]
             {
@@ -1193,9 +1335,34 @@ public static class FactoryYardBuilder
         // The original winding faced inward. With URP's normal back-face
         // culling that made the roof look transparent from above, revealing
         // skylight shadows through it. These triangles face outward.
-        var triangles = ridgeAlongX
-            ? new[] { 0, 5, 1, 0, 4, 5, 4, 3, 5, 4, 2, 3, 0, 2, 4, 1, 5, 3, 0, 3, 2, 0, 1, 3 }
-            : new[] { 0, 5, 4, 0, 2, 5, 4, 3, 1, 4, 5, 3, 0, 4, 1, 2, 3, 5, 0, 3, 2, 0, 1, 3 };
+        int[] triangles;
+        if (ridgeAlongX)
+        {
+            triangles = new[] { 0, 5, 1, 0, 4, 5, 4, 3, 5, 4, 2, 3, 0, 2, 4, 1, 5, 3, 0, 3, 2, 0, 1, 3 };
+        }
+        else
+        {
+            // The normal side-gable roof is closed at both ends. When it
+            // joins the main ridge, leave that end open for the hip connector
+            // rather than retaining an unwanted vertical triangular cap.
+            var sideTriangles = new List<int>
+            {
+                0, 5, 4, 0, 2, 5,
+                4, 3, 1, 4, 5, 3,
+            };
+            if (openGableEnd != -1)
+            {
+                sideTriangles.AddRange(new[] { 0, 4, 1 });
+            }
+
+            if (openGableEnd != 1)
+            {
+                sideTriangles.AddRange(new[] { 2, 3, 5 });
+            }
+
+            sideTriangles.AddRange(new[] { 0, 3, 2, 0, 1, 3 });
+            triangles = sideTriangles.ToArray();
+        }
 
         var roof = new GameObject(name);
         roof.transform.SetParent(parent, false);
@@ -1248,7 +1415,7 @@ public static class FactoryYardBuilder
         }
     }
 
-    private static void AddRoofSurfaceDetails(Transform parent, Bounds wallBounds, bool ridgeAlongX, Material seamMaterial, Material ridgeMaterial)
+    private static void AddRoofSurfaceDetails(Transform parent, Bounds wallBounds, bool ridgeAlongX, float roofRise, Material seamMaterial, Material ridgeMaterial)
     {
         var root = new GameObject("Roof_Corrugation").transform;
         root.SetParent(parent, false);
@@ -1257,44 +1424,76 @@ public static class FactoryYardBuilder
         if (ridgeAlongX)
         {
             var halfRun = wallBounds.extents.z + 0.32f;
-            var seamLength = Mathf.Sqrt(halfRun * halfRun + GabledRoofRise * GabledRoofRise);
+            var halfX = wallBounds.extents.x + 0.32f;
+            var seamLength = Mathf.Sqrt(halfRun * halfRun + roofRise * roofRise);
             var seamCount = Mathf.Clamp(Mathf.RoundToInt(wallBounds.size.x / 0.72f), 10, 58);
             for (var index = 1; index < seamCount; index++)
             {
                 var x = Mathf.Lerp(wallBounds.min.x + 0.30f, wallBounds.max.x - 0.30f, index / (float)seamCount);
-                AddRoofSeam(root, new Vector3(x, topY + GabledRoofRise * 0.5f + 0.025f, wallBounds.center.z - halfRun * 0.5f),
-                    new Vector3(0f, -GabledRoofRise, -halfRun), seamLength, seamMaterial);
-                AddRoofSeam(root, new Vector3(x, topY + GabledRoofRise * 0.5f + 0.025f, wallBounds.center.z + halfRun * 0.5f),
-                    new Vector3(0f, -GabledRoofRise, halfRun), seamLength, seamMaterial);
+                AddRoofSeam(root, new Vector3(x, topY + roofRise * 0.5f + 0.025f, wallBounds.center.z - halfRun * 0.5f),
+                    new Vector3(0f, -roofRise, -halfRun), seamLength, seamMaterial);
+                AddRoofSeam(root, new Vector3(x, topY + roofRise * 0.5f + 0.025f, wallBounds.center.z + halfRun * 0.5f),
+                    new Vector3(0f, -roofRise, halfRun), seamLength, seamMaterial);
             }
 
-            CreateVisualCube("Ridge_Cap", root, new Vector3(wallBounds.center.x, topY + GabledRoofRise + 0.07f, wallBounds.center.z),
+            CreateVisualCube("Ridge_Cap", root, new Vector3(wallBounds.center.x, topY + roofRise + 0.07f, wallBounds.center.z),
                 new Vector3(wallBounds.size.x + 0.70f, 0.14f, 0.22f), ridgeMaterial);
             CreateVisualCube("Eave_Fascia_Front", root, new Vector3(wallBounds.center.x, topY + 0.06f, wallBounds.center.z - halfRun),
                 new Vector3(wallBounds.size.x + 0.70f, 0.11f, 0.15f), ridgeMaterial);
             CreateVisualCube("Eave_Fascia_Back", root, new Vector3(wallBounds.center.x, topY + 0.06f, wallBounds.center.z + halfRun),
                 new Vector3(wallBounds.size.x + 0.70f, 0.11f, 0.15f), ridgeMaterial);
+
+            var edgeXLeft = wallBounds.center.x - halfX - 0.045f;
+            var edgeXRight = wallBounds.center.x + halfX + 0.045f;
+            var frontZ = wallBounds.center.z - halfRun;
+            var backZ = wallBounds.center.z + halfRun;
+            var eaveY = topY + 0.035f;
+            var ridgeY = topY + roofRise + 0.035f;
+            AddRoofEdgeTrim(root, "Gable_Trim_Left_Front", new Vector3(edgeXLeft, eaveY, frontZ), new Vector3(edgeXLeft, ridgeY, wallBounds.center.z), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Left_Back", new Vector3(edgeXLeft, ridgeY, wallBounds.center.z), new Vector3(edgeXLeft, eaveY, backZ), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Right_Front", new Vector3(edgeXRight, eaveY, frontZ), new Vector3(edgeXRight, ridgeY, wallBounds.center.z), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Right_Back", new Vector3(edgeXRight, ridgeY, wallBounds.center.z), new Vector3(edgeXRight, eaveY, backZ), ridgeMaterial);
         }
         else
         {
             var halfRun = wallBounds.extents.x + 0.32f;
-            var seamLength = Mathf.Sqrt(halfRun * halfRun + GabledRoofRise * GabledRoofRise);
+            var halfZ = wallBounds.extents.z + 0.32f;
+            var seamLength = Mathf.Sqrt(halfRun * halfRun + roofRise * roofRise);
             var seamCount = Mathf.Clamp(Mathf.RoundToInt(wallBounds.size.z / 0.72f), 10, 58);
             for (var index = 1; index < seamCount; index++)
             {
                 var z = Mathf.Lerp(wallBounds.min.z + 0.30f, wallBounds.max.z - 0.30f, index / (float)seamCount);
-                AddRoofSeam(root, new Vector3(wallBounds.center.x - halfRun * 0.5f, topY + GabledRoofRise * 0.5f + 0.025f, z),
-                    new Vector3(-halfRun, -GabledRoofRise, 0f), seamLength, seamMaterial);
-                AddRoofSeam(root, new Vector3(wallBounds.center.x + halfRun * 0.5f, topY + GabledRoofRise * 0.5f + 0.025f, z),
-                    new Vector3(halfRun, -GabledRoofRise, 0f), seamLength, seamMaterial);
+                AddRoofSeam(root, new Vector3(wallBounds.center.x - halfRun * 0.5f, topY + roofRise * 0.5f + 0.025f, z),
+                    new Vector3(-halfRun, -roofRise, 0f), seamLength, seamMaterial);
+                AddRoofSeam(root, new Vector3(wallBounds.center.x + halfRun * 0.5f, topY + roofRise * 0.5f + 0.025f, z),
+                    new Vector3(halfRun, -roofRise, 0f), seamLength, seamMaterial);
             }
 
-            CreateVisualCube("Ridge_Cap", root, new Vector3(wallBounds.center.x, topY + GabledRoofRise + 0.07f, wallBounds.center.z),
+            CreateVisualCube("Ridge_Cap", root, new Vector3(wallBounds.center.x, topY + roofRise + 0.07f, wallBounds.center.z),
                 new Vector3(0.22f, 0.14f, wallBounds.size.z + 0.70f), ridgeMaterial);
             CreateVisualCube("Eave_Fascia_Left", root, new Vector3(wallBounds.center.x - halfRun, topY + 0.06f, wallBounds.center.z),
-                new Vector3(0.15f, 0.11f, wallBounds.size.z + 0.70f), ridgeMaterial);
+                new Vector3(0.20f, 0.12f, wallBounds.size.z + 0.70f), ridgeMaterial);
             CreateVisualCube("Eave_Fascia_Right", root, new Vector3(wallBounds.center.x + halfRun, topY + 0.06f, wallBounds.center.z),
-                new Vector3(0.15f, 0.11f, wallBounds.size.z + 0.70f), ridgeMaterial);
+                new Vector3(0.20f, 0.12f, wallBounds.size.z + 0.70f), ridgeMaterial);
+
+            // The two gable ends of each side hall also receive a lower
+            // fascia. Together with the sloping trims this closes the roof
+            // outline without making the treatment too heavy.
+            CreateVisualCube("Gable_Base_Trim_Front", root, new Vector3(wallBounds.center.x, topY + 0.055f, wallBounds.center.z - halfZ),
+                new Vector3(wallBounds.size.x + 0.70f, 0.12f, 0.16f), ridgeMaterial);
+            CreateVisualCube("Gable_Base_Trim_Back", root, new Vector3(wallBounds.center.x, topY + 0.055f, wallBounds.center.z + halfZ),
+                new Vector3(wallBounds.size.x + 0.70f, 0.12f, 0.16f), ridgeMaterial);
+
+            var leftX = wallBounds.center.x - halfRun;
+            var rightX = wallBounds.center.x + halfRun;
+            var frontZ = wallBounds.center.z - halfZ - 0.045f;
+            var backZ = wallBounds.center.z + halfZ + 0.045f;
+            var eaveY = topY + 0.035f;
+            var ridgeY = topY + roofRise + 0.035f;
+            AddRoofEdgeTrim(root, "Gable_Trim_Front_Left", new Vector3(leftX, eaveY, frontZ), new Vector3(wallBounds.center.x, ridgeY, frontZ), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Front_Right", new Vector3(wallBounds.center.x, ridgeY, frontZ), new Vector3(rightX, eaveY, frontZ), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Back_Left", new Vector3(leftX, eaveY, backZ), new Vector3(wallBounds.center.x, ridgeY, backZ), ridgeMaterial);
+            AddRoofEdgeTrim(root, "Gable_Trim_Back_Right", new Vector3(wallBounds.center.x, ridgeY, backZ), new Vector3(rightX, eaveY, backZ), ridgeMaterial);
         }
     }
 
@@ -1304,22 +1503,268 @@ public static class FactoryYardBuilder
         seam.transform.rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
     }
 
+    private static void AddRoofEdgeTrim(Transform parent, string name, Vector3 start, Vector3 end, Material material)
+    {
+        var trim = CreateVisualCube(name, parent, (start + end) * 0.5f, Vector3.one, material);
+        SetRoofEdgeTrimGeometry(trim.transform, start, end);
+    }
+
+    private static void SetRoofEdgeTrimGeometry(Transform trim, Vector3 start, Vector3 end)
+    {
+        if (trim == null)
+        {
+            return;
+        }
+
+        var direction = end - start;
+        if (direction.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        trim.position = (start + end) * 0.5f;
+        trim.rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+        trim.localScale = new Vector3(0.12f, 0.12f, direction.magnitude + 0.10f);
+    }
+
+    private static float GetRoofRiseForHall(Transform hall, Bounds wallBounds, bool ridgeAlongX)
+    {
+        if (ridgeAlongX || hall == null || hall.parent == null)
+        {
+            return GabledRoofRise;
+        }
+
+        var mainHall = hall.parent.Find("North_Main_Hall");
+        var mainWalls = mainHall != null ? mainHall.Find("Walls") : null;
+        var mainRenderer = mainWalls != null ? mainWalls.GetComponent<Renderer>() : null;
+        if (mainRenderer == null)
+        {
+            return GabledRoofRise;
+        }
+
+        var mainRidgeY = mainRenderer.bounds.max.y + 0.03f + GabledRoofRise;
+        return Mathf.Max(0.35f, mainRidgeY - wallBounds.max.y - 0.03f);
+    }
+
+    private static bool TryGetMainHallWallBounds(Transform environment, out Bounds mainWallBounds)
+    {
+        mainWallBounds = new Bounds();
+        var mainHall = environment != null ? environment.Find("North_Main_Hall") : null;
+        var mainWalls = mainHall != null ? mainHall.Find("Walls") : null;
+        var mainRenderer = mainWalls != null ? mainWalls.GetComponent<Renderer>() : null;
+        if (mainRenderer == null)
+        {
+            return false;
+        }
+
+        mainWallBounds = mainRenderer.bounds;
+        return true;
+    }
+
+    private static int GetSideRoofConnectionDirection(Transform hall, Bounds wallBounds, bool ridgeAlongX)
+    {
+        if (ridgeAlongX || !TryGetMainHallWallBounds(hall != null ? hall.parent : null, out var mainWallBounds))
+        {
+            return 0;
+        }
+
+        const float roofOverhang = 0.32f;
+        if (mainWallBounds.center.z > wallBounds.max.z + roofOverhang + 0.05f)
+        {
+            return 1;
+        }
+
+        if (mainWallBounds.center.z < wallBounds.min.z - roofOverhang - 0.05f)
+        {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    private static void AddSideRoofHipConnection(
+        Transform parent,
+        Bounds sideBounds,
+        Bounds mainWallBounds,
+        float joinZ,
+        Material roofMaterial,
+        Material trimMaterial)
+    {
+        var mainRidgeZ = mainWallBounds.center.z;
+        var mainPeakY = GetMainRoofSurfaceY(mainWallBounds, mainRidgeZ);
+        if (mainRidgeZ <= joinZ + 0.05f)
+        {
+            return;
+        }
+
+        var halfX = sideBounds.extents.x + 0.32f;
+        var baseY = sideBounds.max.y + 0.03f;
+        var origin = new Vector3(sideBounds.center.x, baseY, joinZ);
+        // The main roof has already risen above the side-hall eaves at this
+        // Z position. Begin the connecting hip on that surface instead of
+        // below it, then lift the flashing a little further. This prevents
+        // the diagonal trim from disappearing inside the larger roof.
+        var joinSurfaceY = Mathf.Max(baseY, GetMainRoofSurfaceY(mainWallBounds, joinZ) + SideRoofJunctionSurfaceLift);
+        var ridgeY = mainPeakY;
+        var tipY = mainPeakY + SideRoofJunctionSurfaceLift;
+        var runZ = mainRidgeZ - joinZ;
+
+        var connector = new GameObject("Side_Roof_Hip_Connection");
+        connector.transform.SetParent(parent, false);
+        connector.transform.position = origin;
+        var mesh = new Mesh { name = "Side_Roof_Hip_Connection_Mesh" };
+        mesh.vertices = new[]
+        {
+            new Vector3(-halfX, joinSurfaceY - baseY, 0f),
+            new Vector3(0f, ridgeY - baseY, 0f),
+            new Vector3(halfX, joinSurfaceY - baseY, 0f),
+            new Vector3(0f, tipY - baseY, runZ),
+        };
+        mesh.triangles = new[] { 0, 3, 1, 1, 3, 2, 0, 2, 3 };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        connector.AddComponent<MeshFilter>().sharedMesh = mesh;
+        connector.AddComponent<MeshRenderer>().sharedMaterial = roofMaterial;
+        connector.AddComponent<MeshCollider>().sharedMesh = mesh;
+
+        var left = origin + new Vector3(-halfX, joinSurfaceY - baseY + SideRoofJunctionTrimLift, 0f);
+        var ridge = origin + new Vector3(0f, ridgeY - baseY + SideRoofJunctionTrimLift, 0f);
+        var right = origin + new Vector3(halfX, joinSurfaceY - baseY + SideRoofJunctionTrimLift, 0f);
+        var tip = origin + new Vector3(0f, tipY - baseY + SideRoofJunctionTrimLift, runZ);
+        AddRoofEdgeTrim(connector.transform, "Hip_Trim_Left", left, tip, trimMaterial);
+        AddRoofEdgeTrim(connector.transform, "Hip_Ridge_Trim", ridge, tip, trimMaterial);
+        AddRoofEdgeTrim(connector.transform, "Hip_Trim_Right", right, tip, trimMaterial);
+    }
+
+    private static Transform FindActiveSideRoofHipConnection(Transform hall)
+    {
+        if (hall == null)
+        {
+            return null;
+        }
+
+        foreach (var candidate in hall.GetComponentsInChildren<Transform>(true))
+        {
+            if (candidate.name == "Side_Roof_Hip_Connection" && candidate.gameObject.activeInHierarchy)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool RefitSideRoofHipConnection(Transform connector, Bounds sideBounds, Bounds mainWallBounds)
+    {
+        var meshFilter = connector != null ? connector.GetComponent<MeshFilter>() : null;
+        if (meshFilter == null || meshFilter.sharedMesh == null)
+        {
+            return false;
+        }
+
+        var joinZ = sideBounds.max.z + 0.32f;
+        var mainRidgeZ = mainWallBounds.center.z;
+        if (mainRidgeZ <= joinZ + 0.05f)
+        {
+            return false;
+        }
+
+        var halfX = sideBounds.extents.x + 0.32f;
+        var baseY = sideBounds.max.y + 0.03f;
+        var mainPeakY = GetMainRoofSurfaceY(mainWallBounds, mainRidgeZ);
+        var joinSurfaceY = Mathf.Max(baseY, GetMainRoofSurfaceY(mainWallBounds, joinZ) + SideRoofJunctionSurfaceLift);
+        var tipY = mainPeakY + SideRoofJunctionSurfaceLift;
+        var runZ = mainRidgeZ - joinZ;
+        var origin = new Vector3(sideBounds.center.x, baseY, joinZ);
+
+        Undo.RecordObject(connector, "Refit Side Roof Junction");
+        Undo.RecordObject(meshFilter.sharedMesh, "Refit Side Roof Junction");
+        connector.position = origin;
+
+        var mesh = meshFilter.sharedMesh;
+        mesh.Clear();
+        mesh.vertices = new[]
+        {
+            new Vector3(-halfX, joinSurfaceY - baseY, 0f),
+            new Vector3(0f, mainPeakY - baseY, 0f),
+            new Vector3(halfX, joinSurfaceY - baseY, 0f),
+            new Vector3(0f, tipY - baseY, runZ),
+        };
+        mesh.triangles = new[] { 0, 3, 1, 1, 3, 2, 0, 2, 3 };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        EditorUtility.SetDirty(mesh);
+
+        var collider = connector.GetComponent<MeshCollider>();
+        if (collider != null)
+        {
+            Undo.RecordObject(collider, "Refit Side Roof Junction");
+            collider.sharedMesh = null;
+            collider.sharedMesh = mesh;
+            EditorUtility.SetDirty(collider);
+        }
+
+        var left = origin + new Vector3(-halfX, joinSurfaceY - baseY + SideRoofJunctionTrimLift, 0f);
+        var ridge = origin + new Vector3(0f, mainPeakY - baseY + SideRoofJunctionTrimLift, 0f);
+        var right = origin + new Vector3(halfX, joinSurfaceY - baseY + SideRoofJunctionTrimLift, 0f);
+        var tip = origin + new Vector3(0f, tipY - baseY + SideRoofJunctionTrimLift, runZ);
+        RefitRoofEdgeTrim(connector.Find("Hip_Trim_Left"), left, tip);
+        RefitRoofEdgeTrim(connector.Find("Hip_Ridge_Trim"), ridge, tip);
+        RefitRoofEdgeTrim(connector.Find("Hip_Trim_Right"), right, tip);
+        EditorUtility.SetDirty(connector);
+        return true;
+    }
+
+    private static void RefitRoofEdgeTrim(Transform trim, Vector3 start, Vector3 end)
+    {
+        if (trim == null)
+        {
+            return;
+        }
+
+        Undo.RecordObject(trim, "Refit Side Roof Junction");
+        SetRoofEdgeTrimGeometry(trim, start, end);
+        EditorUtility.SetDirty(trim);
+    }
+
+    private static float GetMainRoofSurfaceY(Bounds mainWallBounds, float z)
+    {
+        var halfRun = Mathf.Max(0.01f, mainWallBounds.extents.z + 0.32f);
+        var ridgeFactor = 1f - Mathf.Clamp01(Mathf.Abs(z - mainWallBounds.center.z) / halfRun);
+        return mainWallBounds.max.y + 0.03f + GabledRoofRise * ridgeFactor;
+    }
+
     private static void AddFrontWindows(Transform parent, Vector3 centre, Vector3 size, Material window, Material frame)
     {
         var z = centre.z - size.z * 0.5f - 0.055f;
-        // Keep the two windows on each side clear of the adjacent halls and
-        // distribute them around the central truck gate instead of clustering
-        // the inner pair close to the centre.
         var panelWidth = Mathf.Min(3.15f, size.x * 0.085f);
         var panelHeight = Mathf.Min(1.2f, size.y * 0.135f);
         var windowY = centre.y + size.y * 0.14f;
-        foreach (var xFactor in new[] { -0.315f, -0.205f, 0.205f, 0.315f })
+        // The outer edge of each outer window aligns exactly with the outer
+        // edge of the corresponding parcel-exit opening. This moves the two
+        // window pairs closer to the central truck gate as set in the scene.
+        foreach (var xOffset in GetMainFrontWindowOffsets(size, panelWidth))
         {
             // The main-hall front windows have four even panes: their third
             // vertical mullion is an extra divider requested for the central
             // building, while the side-hall windows keep their existing form.
-            AddWindow("Front_Window", parent, new Vector3(centre.x + size.x * xFactor, windowY, z), new Vector3(panelWidth, panelHeight, 0.10f), window, frame, false, 3);
+            AddWindow("Front_Window", parent, new Vector3(centre.x + xOffset, windowY, z), new Vector3(panelWidth, panelHeight, 0.10f), window, frame, false, 3);
         }
+    }
+
+    private static float[] GetMainFrontWindowOffsets(Vector3 hallSize, float panelWidth)
+    {
+        const float parcelExitCentreX = 11.5f;
+        const float parcelExitWidth = 2.45f;
+        var outerWindowCentre = parcelExitCentreX + parcelExitWidth * 0.5f - panelWidth * 0.5f;
+        var pairCentreSpacing = hallSize.x * 0.110f;
+        return new[]
+        {
+            -outerWindowCentre,
+            -outerWindowCentre + pairCentreSpacing,
+            outerWindowCentre - pairCentreSpacing,
+            outerWindowCentre,
+        };
     }
 
     private static void AddSideWindows(Transform parent, Vector3 centre, Vector3 size, Material window, Material frame)
@@ -1347,8 +1792,10 @@ public static class FactoryYardBuilder
         var root = new GameObject("Side_Hall_Front_Metal_Door").transform;
         root.SetParent(parent, false);
 
-        var doorWidth = Mathf.Min(wallBounds.size.x * 0.67f, 3.30f);
-        var doorHeight = Mathf.Min(wallBounds.size.y * 0.55f, 4.80f);
+        // A narrow, human-sized leaf makes this read as a standard access
+        // door instead of a loading gate.
+        var doorWidth = Mathf.Min(wallBounds.size.x * 0.26f, 1.25f);
+        var doorHeight = Mathf.Min(wallBounds.size.y * 0.29f, 2.45f);
         var doorBottom = wallBounds.min.y + 0.20f;
         var doorCentre = new Vector3(
             wallBounds.center.x,
@@ -1357,8 +1804,8 @@ public static class FactoryYardBuilder
 
         CreateVisualCube("Metal_Door_Panel", root, doorCentre, new Vector3(doorWidth, doorHeight, 0.10f), doorMaterial);
 
-        const float frameThickness = 0.12f;
-        var frameDepth = 0.15f;
+        const float frameThickness = 0.10f;
+        const float frameDepth = 0.14f;
         CreateVisualCube("Door_Frame_Left", root,
             doorCentre + new Vector3(-doorWidth * 0.5f - frameThickness * 0.5f, 0f, -0.035f),
             new Vector3(frameThickness, doorHeight + frameThickness * 2f, frameDepth), frameMaterial);
@@ -1372,26 +1819,34 @@ public static class FactoryYardBuilder
             doorCentre - new Vector3(0f, doorHeight * 0.5f - 0.05f, 0.035f),
             new Vector3(doorWidth + frameThickness * 2f, 0.10f, frameDepth), frameMaterial);
 
-        // Horizontal ribs and the centre join make the simple panel read as
-        // a pair of folded-sheet-metal industrial doors.
-        const int ribCount = 12;
-        for (var rib = 1; rib < ribCount; rib++)
+        // Two shallow pressed-metal panels give the door detail without
+        // turning it into a roller shutter or a double loading gate.
+        var insetWidth = doorWidth * 0.68f;
+        CreateVisualCube("Door_Upper_Inset", root,
+            doorCentre + new Vector3(0f, doorHeight * 0.20f, -0.062f),
+            new Vector3(insetWidth, doorHeight * 0.27f, 0.028f), ribMaterial);
+        CreateVisualCube("Door_Lower_Inset", root,
+            doorCentre + new Vector3(0f, -doorHeight * 0.23f, -0.062f),
+            new Vector3(insetWidth, doorHeight * 0.31f, 0.028f), ribMaterial);
+
+        // Hinges at the left edge and one horizontal handle on the right make
+        // its opening direction immediately legible.
+        var hingeX = doorCentre.x - doorWidth * 0.5f + 0.055f;
+        foreach (var hingeHeight in new[] { -0.32f, 0f, 0.32f })
         {
-            var y = Mathf.Lerp(doorBottom + 0.18f, doorBottom + doorHeight - 0.18f, rib / (float)ribCount);
-            CreateVisualCube("Door_Horizontal_Rib", root,
-                new Vector3(doorCentre.x, y, doorCentre.z - 0.065f),
-                new Vector3(doorWidth - 0.10f, 0.035f, 0.035f), ribMaterial);
+            CreateVisualCube("Door_Hinge", root,
+                new Vector3(hingeX, doorCentre.y + hingeHeight * doorHeight, doorCentre.z - 0.085f),
+                new Vector3(0.10f, 0.095f, 0.045f), ribMaterial);
         }
 
-        CreateVisualCube("Door_Centre_Join", root,
-            new Vector3(doorCentre.x, doorCentre.y, doorCentre.z - 0.067f),
-            new Vector3(0.055f, doorHeight - 0.12f, 0.040f), ribMaterial);
-        foreach (var side in new[] { -1f, 1f })
-        {
-            CreateVisualCube("Door_Handle", root,
-                new Vector3(doorCentre.x + side * 0.18f, doorCentre.y, doorCentre.z - 0.095f),
-                new Vector3(0.055f, 0.48f, 0.050f), ribMaterial);
-        }
+        var handlePosition = new Vector3(
+            doorCentre.x + doorWidth * 0.27f,
+            doorCentre.y - doorHeight * 0.04f,
+            doorCentre.z - 0.105f);
+        CreateVisualCube("Door_Handle_Base", root, handlePosition + new Vector3(0f, 0f, 0.016f),
+            new Vector3(0.11f, 0.15f, 0.035f), ribMaterial);
+        CreateVisualCube("Door_Handle", root, handlePosition,
+            new Vector3(0.24f, 0.050f, 0.060f), frameMaterial);
     }
 
     private static void AddWindow(string name, Transform parent, Vector3 centre, Vector3 panelSize, Material window, Material frame, bool alongZ, int verticalMullionCount = 2)
@@ -1430,9 +1885,8 @@ public static class FactoryYardBuilder
         }
     }
 
-    private static void AddMainRoofSkylights(Transform parent, Bounds wallBounds, Material skylight, Material frame)
+    private static void AddMainRoofSkylights(Transform parent, Transform environment, Bounds wallBounds, float roofRise, Material skylight, Material frame)
     {
-        var roofRise = GabledRoofRise;
         var halfZ = wallBounds.extents.z + 0.32f;
         var zOffset = -halfZ * 0.41f;
         var roofY = wallBounds.max.y + 0.03f + roofRise * (1f - Mathf.Abs(zOffset) / halfZ) + 0.08f;
@@ -1440,13 +1894,65 @@ public static class FactoryYardBuilder
         var lensSize = new Vector3(Mathf.Min(2.0f, wallBounds.size.x * 0.042f), 0.10f, Mathf.Min(1.05f, wallBounds.size.z * 0.21f));
         foreach (var xFactor in new[] { -0.375f, -0.229f, -0.083f, 0.083f, 0.229f, 0.375f })
         {
-            AddSkylight(parent, new Vector3(wallBounds.center.x + wallBounds.size.x * xFactor, roofY, wallBounds.center.z + zOffset), lensSize, Quaternion.Euler(-slopeAngle, 0f, 0f), skylight, frame);
+            var skylightPosition = new Vector3(wallBounds.center.x + wallBounds.size.x * xFactor, roofY, wallBounds.center.z + zOffset);
+            // The two outer roof skylights intersect the new hip connections.
+            // Omit only any unit that actually enters that roof footprint.
+            if (DoesMainSkylightIntersectSideRoofConnection(environment, skylightPosition, lensSize))
+            {
+                continue;
+            }
+
+            AddSkylight(parent, skylightPosition, lensSize, Quaternion.Euler(-slopeAngle, 0f, 0f), skylight, frame);
         }
     }
 
-    private static void AddSideRoofSkylights(Transform parent, Bounds wallBounds, float inwardSide, Material skylight, Material frame)
+    private static bool DoesMainSkylightIntersectSideRoofConnection(Transform environment, Vector3 skylightPosition, Vector3 skylightSize)
     {
-        var roofRise = GabledRoofRise;
+        if (!TryGetMainHallWallBounds(environment, out var mainWallBounds))
+        {
+            return false;
+        }
+
+        const float roofOverhang = 0.32f;
+        foreach (var sideName in new[] { "West_Hall", "East_Hall" })
+        {
+            var sideHall = environment.Find(sideName);
+            var sideWalls = sideHall != null ? sideHall.Find("Walls") : null;
+            var sideRenderer = sideWalls != null ? sideWalls.GetComponent<Renderer>() : null;
+            if (sideRenderer == null)
+            {
+                continue;
+            }
+
+            var sideBounds = sideRenderer.bounds;
+            if (GetSideRoofConnectionDirection(sideHall, sideBounds, false) != 1)
+            {
+                continue;
+            }
+
+            var joinZ = sideBounds.max.z + roofOverhang;
+            var tipZ = mainWallBounds.center.z;
+            var halfSkylightZ = skylightSize.z * 0.5f + 0.10f;
+            if (skylightPosition.z + halfSkylightZ < joinZ || skylightPosition.z - halfSkylightZ > tipZ)
+            {
+                continue;
+            }
+
+            var alongConnection = Mathf.Clamp01((skylightPosition.z - joinZ) / (tipZ - joinZ));
+            var halfConnectionWidth = (sideBounds.extents.x + roofOverhang) * (1f - alongConnection);
+            var halfSkylightX = skylightSize.x * 0.5f + 0.12f;
+            if (skylightPosition.x + halfSkylightX >= sideBounds.center.x - halfConnectionWidth &&
+                skylightPosition.x - halfSkylightX <= sideBounds.center.x + halfConnectionWidth)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddSideRoofSkylights(Transform parent, Bounds wallBounds, float roofRise, float inwardSide, Material skylight, Material frame)
+    {
         var halfX = wallBounds.extents.x + 0.32f;
         var xOffset = inwardSide * halfX * 0.355f;
         var roofY = wallBounds.max.y + 0.03f + roofRise * (1f - Mathf.Abs(xOffset) / halfX) + 0.08f;
@@ -2224,6 +2730,40 @@ public static class FactoryYardBuilder
             material.SetFloat("_Metallic", metallic);
         }
 
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+
+    // The roof is intentionally unaffected by directional lighting.  Apart
+    // from keeping the requested light-grey colour consistent over both
+    // slopes, this prevents the corrugation from making an unintended broad
+    // dark-to-light gradient.
+    private static Material GetUniformRoofMaterial(string name, Color color)
+    {
+        var path = $"{MaterialFolder}/{name}.mat";
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+
+        if (material == null)
+        {
+            material = new Material(shader ?? Shader.Find("Standard")) { name = name };
+            AssetDatabase.CreateAsset(material, path);
+        }
+        else if (shader != null && material.shader != shader)
+        {
+            material.shader = shader;
+        }
+
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", color);
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            material.color = color;
+        }
+
+        EnsureOpaqueBuildingMaterial(material);
         EditorUtility.SetDirty(material);
         return material;
     }
