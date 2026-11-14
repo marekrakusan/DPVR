@@ -28,6 +28,12 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     [Header("Full-load reward")]
     [Tooltip("Colour used for the forklift's orange body panels after all 30 boxes are captured.")]
     public Color fullLoadRewardColor = new Color(0.08f, 0.65f, 0.15f, 1f);
+    [Tooltip("Colour earned after two fully loaded deliveries during one campaign.")]
+    public Color silverLoadRewardColor = new Color(0.68f, 0.72f, 0.76f, 1f);
+    [Tooltip("Colour earned after three fully loaded deliveries during one campaign.")]
+    public Color goldLoadRewardColor = new Color(0.93f, 0.65f, 0.08f, 1f);
+    [Tooltip("How quickly the four-delivery rainbow finish cycles through its hues.")]
+    [Min(0.01f)] public float rainbowHueSpeed = 0.18f;
 
     [Header("Capture footprint")]
     [Min(0.01f)] public float captureWidth = 1.40f;
@@ -52,9 +58,9 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     private float liftStartHeight;
     private float liftTarget;
     private float liftElapsed;
-    private bool fullLoadRewardApplied;
     private bool fullLoadRewardReady;
     private ForkliftFullLoadReward fullLoadRewardEffect;
+    private float rainbowHue;
     private readonly List<OrangeMaterialSlot> orangeMaterialSlots = new();
 
     private readonly struct OrangeMaterialSlot
@@ -97,6 +103,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
 
         if (!hasLiftRestPose || Mathf.Abs(currentLiftHeight - liftTarget) < 0.0001f)
         {
+            UpdateRainbowReward();
             return;
         }
 
@@ -104,6 +111,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
         var progress = Mathf.Clamp01(liftElapsed / Mathf.Max(0.01f, truckLiftDuration));
         currentLiftHeight = Mathf.Lerp(liftStartHeight, liftTarget, Mathf.SmoothStep(0f, 1f, progress));
         ApplyTruckLoadingLift();
+        UpdateRainbowReward();
     }
 
     /// <summary>
@@ -176,7 +184,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     /// </summary>
     public void CelebrateFullLoadAfterTransfer()
     {
-        var shouldCelebrate = fullLoadRewardReady && !LevelProgression.HasFullLoadForkliftReward;
+        var shouldCelebrate = fullLoadRewardReady;
         fullLoadRewardReady = false;
         if (!shouldCelebrate)
         {
@@ -194,7 +202,7 @@ public sealed class ForkliftLoadArea : MonoBehaviour
 
         fullLoadRewardEffect.Play(() =>
         {
-            LevelProgression.UnlockFullLoadForkliftReward();
+            LevelProgression.RecordFullLoadDelivery();
             ApplyFullLoadReward();
         });
     }
@@ -207,8 +215,20 @@ public sealed class ForkliftLoadArea : MonoBehaviour
     {
         // The yard has one active forklift. FindAny avoids Unity's obsolete
         // instance-order dependent lookup and is sufficient for this query.
-        var loadArea = Object.FindAnyObjectByType<ForkliftLoadArea>();
+        var loadArea = UnityEngine.Object.FindAnyObjectByType<ForkliftLoadArea>();
         return loadArea != null && loadArea.TryCatch(package, dischargePoint);
+    }
+
+    /// <summary>
+    /// Refreshes the body panels immediately after an in-game colour code is
+    /// entered. Normal reward progression also uses the same appearance path.
+    /// </summary>
+    public void RefreshRewardAppearance()
+    {
+        if (LevelProgression.HasFullLoadForkliftReward)
+        {
+            ApplyFullLoadReward();
+        }
     }
 
     private bool Covers(Vector3 dischargePoint)
@@ -302,12 +322,40 @@ public sealed class ForkliftLoadArea : MonoBehaviour
 
     private void ApplyFullLoadReward()
     {
-        if (fullLoadRewardApplied)
+        CacheOrangeBodyMaterialSlots();
+        var appearanceTier = LevelProgression.ForkliftAppearanceTier;
+        if (appearanceTier <= 0)
         {
             return;
         }
 
-        CacheOrangeBodyMaterialSlots();
+        ApplyBodyColor(GetRewardColor(appearanceTier));
+    }
+
+    private void UpdateRainbowReward()
+    {
+        if (LevelProgression.ForkliftAppearanceTier < 4)
+        {
+            return;
+        }
+
+        rainbowHue = Mathf.Repeat(rainbowHue + Time.deltaTime * rainbowHueSpeed, 1f);
+        ApplyBodyColor(Color.HSVToRGB(rainbowHue, 0.82f, 1f));
+    }
+
+    private Color GetRewardColor(int deliveryCount)
+    {
+        return deliveryCount switch
+        {
+            1 => fullLoadRewardColor,
+            2 => silverLoadRewardColor,
+            3 => goldLoadRewardColor,
+            _ => Color.HSVToRGB(rainbowHue, 0.82f, 1f)
+        };
+    }
+
+    private void ApplyBodyColor(Color color)
+    {
         foreach (var slot in orangeMaterialSlots)
         {
             if (slot.Renderer == null)
@@ -320,18 +368,16 @@ public sealed class ForkliftLoadArea : MonoBehaviour
             var material = slot.Renderer.sharedMaterials[slot.MaterialIndex];
             if (material != null && material.HasProperty("_BaseColor"))
             {
-                block.SetColor("_BaseColor", fullLoadRewardColor);
+                block.SetColor("_BaseColor", color);
             }
 
             if (material != null && material.HasProperty("_Color"))
             {
-                block.SetColor("_Color", fullLoadRewardColor);
+                block.SetColor("_Color", color);
             }
 
             slot.Renderer.SetPropertyBlock(block, slot.MaterialIndex);
         }
-
-        fullLoadRewardApplied = true;
     }
 
     private void CacheOrangeBodyMaterialSlots()

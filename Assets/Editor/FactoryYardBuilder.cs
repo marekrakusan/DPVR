@@ -485,12 +485,11 @@ public static class FactoryYardBuilder
         visual.transform.localRotation = Quaternion.identity;
         visual.transform.localScale = Vector3.one;
 
-        // The truck starts completely outside the rear of the north hall,
-        // points into the courtyard and stops under the opening at the end of
-        // every parcel round.  Z=23 put the rear of the earlier 6.65 m model
-        // inside the hall, where it could be hidden by the building.
-        const float truckStartZ = 25.5f;
-        truck.transform.position = new Vector3(0f, 0f, truckStartZ);
+        // The truck waits just outside the rear gate and, after loading,
+        // continues along the access road all the way to the outer boundary.
+        const float truckWaitingZ = 25.5f;
+        const float truckExitZ = 99.5f;
+        truck.transform.position = new Vector3(0f, 0f, truckWaitingZ);
         truck.transform.rotation = Quaternion.identity;
 
         var cargo = truck.transform.Find("Truck_Cargo_Anchor");
@@ -558,7 +557,7 @@ public static class FactoryYardBuilder
         controller.loadingStopYaw = 50f;
         controller.reverseTurnPosition = new Vector3(3f, 0f, 8.2f);
         controller.gateExitPosition = new Vector3(0.2f, 0f, 14.1f);
-        controller.exitPosition = new Vector3(0.2f, 0f, truckStartZ);
+        controller.exitPosition = new Vector3(0.2f, 0f, truckExitZ);
         controller.loadingDistance = 1f;
 
         EnsureLevelIntroOverlay(root.transform);
@@ -1166,8 +1165,8 @@ public static class FactoryYardBuilder
         CreateVisualCube(
             "Entrance_Road",
             ground,
-            new Vector3(0f, 0.008f, 27.85f),
-            new Vector3(8f, 0.006f, 14.0f),
+            new Vector3(0f, 0.008f, 57.675f),
+            new Vector3(8f, 0.006f, 87.15f),
             roadAsphalt);
         CreateVisualCube(
             "North_Access_Road",
@@ -1179,7 +1178,10 @@ public static class FactoryYardBuilder
         // A subtly different inner slab identifies the playable forklift
         // courtyard while leaving the outer factory yard slightly darker.
         var gameplayCentre = new Vector3(0f, 0.009f, 0.9f);
-        const float gameplayWidth = 40.5f;
+        // This reaches the inner façades of the two side halls, so the
+        // lighter grey playable courtyard has no narrow darker strip beside
+        // either building.
+        const float gameplayWidth = 43.0f;
         const float gameplayDepth = 29.0f;
         CreateVisualCube(
             "Gameplay_Concrete_Area",
@@ -1296,10 +1298,11 @@ public static class FactoryYardBuilder
 
         // The lots sit beyond the fence, directly below the transverse road.
         // A generous central corridor remains free for the factory entrance.
-        // Their outer edges meet the two side fence lines at X = -40 and
-        // X = +40, making the lots feel built directly against the perimeter.
+        // The west lot reaches its side fence at X = -40. The east lot has
+        // a small extra apron so its final diagonal bay retains the same
+        // direction and length as every preceding bay.
         CreateParkingArea(parking, "Parking_West", new Vector3(-29f, 0f, 25.75f), 22f, 7f, asphalt, paint);
-        CreateParkingArea(parking, "Parking_East", new Vector3(29f, 0f, 25.75f), 22f, 7f, asphalt, paint);
+        CreateParkingArea(parking, "Parking_East", new Vector3(29.625f, 0f, 25.75f), 23.25f, 7f, asphalt, paint);
     }
 
     private static void CreateParkingArea(

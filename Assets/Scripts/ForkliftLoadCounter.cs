@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// Keeps the world-space counter above the main gate in sync with the number
@@ -26,6 +27,9 @@ public sealed class ForkliftLoadCounter : MonoBehaviour
     private Vector3 counterFrameRestPosition;
     private Quaternion counterFrameRestRotation;
     private bool hasCounterFrameRestPose;
+    private Renderer[] counterFrameRenderers;
+    private ShadowCastingMode[] counterFrameRestShadowModes;
+    private bool counterFramePinned;
 
     private void OnEnable()
     {
@@ -111,6 +115,15 @@ public sealed class ForkliftLoadCounter : MonoBehaviour
             return;
         }
 
+        // While the delivery vehicle uses the gate and courtyard, leave the
+        // physical board on its facade. It must never float in front of, or
+        // visually cover, the truck from the player's current camera view.
+        if (deliveryTruck != null && deliveryTruck.IsCounterPinningSuppressed)
+        {
+            RestoreCounterFrameRestPose();
+            return;
+        }
+
         // Always project the original board position. Projecting its current
         // pinned position would make the counter creep further across the
         // screen on every frame.
@@ -140,13 +153,45 @@ public sealed class ForkliftLoadCounter : MonoBehaviour
             // TextMesh is drawn toward its local -Z side. Keep that face and
             // the frame's front toward the camera after pinning it.
             Quaternion.LookRotation(pinnedPosition - sceneCamera.transform.position, sceneCamera.transform.up));
+        SetCounterFramePinned(true);
     }
 
     private void RestoreCounterFrameRestPose()
     {
+        SetCounterFramePinned(false);
         if (hasCounterFrameRestPose && counterFrame != null)
         {
             counterFrame.SetPositionAndRotation(counterFrameRestPosition, counterFrameRestRotation);
+        }
+    }
+
+    private void SetCounterFramePinned(bool pinned)
+    {
+        if (counterFramePinned == pinned) return;
+        CacheCounterFrameRenderers();
+        if (counterFrameRenderers == null) return;
+
+        for (var index = 0; index < counterFrameRenderers.Length; index++)
+        {
+            var renderer = counterFrameRenderers[index];
+            if (renderer == null) continue;
+            renderer.shadowCastingMode = pinned
+                ? ShadowCastingMode.Off
+                : counterFrameRestShadowModes[index];
+        }
+
+        counterFramePinned = pinned;
+    }
+
+    private void CacheCounterFrameRenderers()
+    {
+        if (counterFrame == null || counterFrameRenderers != null) return;
+
+        counterFrameRenderers = counterFrame.GetComponentsInChildren<Renderer>(true);
+        counterFrameRestShadowModes = new ShadowCastingMode[counterFrameRenderers.Length];
+        for (var index = 0; index < counterFrameRenderers.Length; index++)
+        {
+            counterFrameRestShadowModes[index] = counterFrameRenderers[index].shadowCastingMode;
         }
     }
 }

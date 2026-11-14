@@ -46,6 +46,15 @@ public sealed class CameraZoomController : MonoBehaviour
     private float farFieldOfView;
     private float currentDistance;
 
+    // SceneManager.LoadScene creates a new camera component, but these values
+    // intentionally survive that reload. They are cleared only when a brand
+    // new Play session starts, so the authored wide view remains the default.
+    private static bool hasPersistentView;
+    private static Vector3 persistentPosition;
+    private static Quaternion persistentRotation;
+    private static float persistentFieldOfView;
+    private static float persistentDistance;
+
     private void Awake()
     {
         sceneCamera = GetComponent<Camera>();
@@ -56,6 +65,7 @@ public sealed class CameraZoomController : MonoBehaviour
         EnsureMaximumDistance();
         CaptureWideView();
         currentDistance = maximumDistance;
+        RestorePersistentView();
     }
 
     private void Update()
@@ -79,6 +89,15 @@ public sealed class CameraZoomController : MonoBehaviour
             minimumDistance,
             maximumDistance);
         ApplyFramedView();
+        SavePersistentView();
+    }
+
+    private void LateUpdate()
+    {
+        // Keep the exact live pose as well as the logical zoom distance. The
+        // latter is needed for the next wheel step; the former makes a reload
+        // visually seamless even if another camera behaviour adjusted it.
+        SavePersistentView();
     }
 
     /// <summary>
@@ -103,6 +122,7 @@ public sealed class CameraZoomController : MonoBehaviour
 
         CaptureWideView();
         currentDistance = maximumDistance;
+        RestorePersistentView();
     }
 
     private void ApplyFramedView()
@@ -221,5 +241,41 @@ public sealed class CameraZoomController : MonoBehaviour
         {
             maximumDistance = Mathf.Max(minimumDistance, Vector3.Distance(transform.position, focusPoint));
         }
+    }
+
+    private void RestorePersistentView()
+    {
+        if (!hasPersistentView || sceneCamera == null)
+        {
+            return;
+        }
+
+        currentDistance = Mathf.Clamp(persistentDistance, minimumDistance, maximumDistance);
+        transform.SetPositionAndRotation(persistentPosition, persistentRotation);
+        sceneCamera.fieldOfView = persistentFieldOfView;
+    }
+
+    private void SavePersistentView()
+    {
+        if (sceneCamera == null)
+        {
+            return;
+        }
+
+        persistentPosition = transform.position;
+        persistentRotation = transform.rotation;
+        persistentFieldOfView = sceneCamera.fieldOfView;
+        persistentDistance = currentDistance;
+        hasPersistentView = true;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetPersistentViewForNewPlaySession()
+    {
+        hasPersistentView = false;
+        persistentPosition = Vector3.zero;
+        persistentRotation = Quaternion.identity;
+        persistentFieldOfView = 0f;
+        persistentDistance = 0f;
     }
 }

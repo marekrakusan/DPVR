@@ -17,13 +17,22 @@ public sealed class FactoryAudioController : MonoBehaviour
 {
     private const int SampleRate = 22050;
     private const float AmbientDuration = 14f;
+    // The scene already serializes the public engine volume. Keep a small
+    // runtime gain here so older saved scenes receive the fuller, louder
+    // diesel mix too, without overwriting the user's Inspector setting.
+    private const float ForwardEngineGain = 1.5f;
+    private const float ReverseEngineGain = 1.12f;
+    // Keep the engine a touch lower than before: this is a loaded work truck,
+    // not a small petrol car.
+    private const float ForwardEnginePitch = 0.95f;
+    private const float ReverseEnginePitch = 0.80f;
 
     public bool playAmbientMusic = true;
     [Range(0f, 1f)] public float ambientVolume = 0.045f;
     [Range(0f, 1f)] public float packageCatchVolume = 0.16f;
     [Range(0f, 1f)] public float packageDropVolume = 0.22f;
     [Range(0f, 1f)] public float truckLoadVolume = 0.24f;
-    [Range(0f, 1f)] public float truckEngineVolume = 0.42f;
+    [Range(0f, 1f)] public float truckEngineVolume = 0.48f;
     [Range(0f, 1f)] public float truckReverseBeepVolume = 0.22f;
 
     private static FactoryAudioController instance;
@@ -38,13 +47,20 @@ public sealed class FactoryAudioController : MonoBehaviour
     private AudioClip truckEngineClip;
     private AudioClip truckReverseBeepClip;
     private TruckMotion truckMotion = TruckMotion.Stopped;
+    // The truck remains a 2D sound source for legibility, but its engine
+    // still fades according to its authored road departure, independent of
+    // how far the player has zoomed the camera.
+    private float truckDepartureVolumeMultiplier = 1f;
 
     public static void PlayPackageCaught()
     {
         var controller = FindController();
         if (controller != null)
         {
-            controller.PlayOneShot(controller.packageCatchClip, controller.packageCatchVolume);
+            // Intentionally use the former ground-impact sound for a catch.
+            // Keep its original volume together with the sound when swapping
+            // the two package feedback cues.
+            controller.PlayOneShot(controller.packageDropClip, controller.packageDropVolume);
         }
     }
 
@@ -62,7 +78,7 @@ public sealed class FactoryAudioController : MonoBehaviour
         var controller = FindController();
         if (controller != null)
         {
-            controller.PlayOneShot(controller.packageDropClip, controller.packageDropVolume);
+            controller.PlayOneShot(controller.packageCatchClip, controller.packageCatchVolume);
         }
     }
 
@@ -78,6 +94,19 @@ public sealed class FactoryAudioController : MonoBehaviour
     public static void StopTruckMotion()
     {
         SetTruckMotion(TruckMotion.Stopped);
+    }
+
+    /// <summary>
+    /// Applies the truck's progress along the outbound road. Zero is the gate
+    /// and one is the road end, where the engine is fully silent.
+    /// </summary>
+    public static void SetTruckDepartureProgress(float progress)
+    {
+        var controller = FindController();
+        if (controller != null)
+        {
+            controller.SetTruckDepartureProgressInternal(progress);
+        }
     }
 
     private static FactoryAudioController FindController()
@@ -140,7 +169,8 @@ public sealed class FactoryAudioController : MonoBehaviour
 
         if (truckEngineSource != null)
         {
-            truckEngineSource.volume = truckEngineVolume;
+            truckEngineSource.volume = GetTruckEngineVolume(truckMotion);
+            truckEngineSource.pitch = GetTruckEnginePitch(truckMotion);
         }
 
         if (truckReverseBeepSource != null)
@@ -196,13 +226,24 @@ public sealed class FactoryAudioController : MonoBehaviour
         if (motion == TruckMotion.Forward)
         {
             StopSource(truckReverseBeepSource);
-            PlayLoop(truckEngineSource, truckEngineClip, truckEngineVolume);
+            PlayLoop(
+                truckEngineSource,
+                truckEngineClip,
+                GetTruckEngineVolume(TruckMotion.Forward),
+                ForwardEnginePitch);
             return;
         }
 
         if (motion == TruckMotion.Reverse)
         {
-            StopSource(truckEngineSource);
+            // A reversing lorry still idles under its warning beeper. Keeping
+            // this quieter low diesel layer makes the manoeuvre sound like a
+            // vehicle rather than a floating warning tone.
+            PlayLoop(
+                truckEngineSource,
+                truckEngineClip,
+                GetTruckEngineVolume(TruckMotion.Reverse),
+                ReverseEnginePitch);
             PlayLoop(truckReverseBeepSource, truckReverseBeepClip, truckReverseBeepVolume);
             return;
         }
@@ -211,7 +252,30 @@ public sealed class FactoryAudioController : MonoBehaviour
         StopSource(truckReverseBeepSource);
     }
 
-    private static void PlayLoop(AudioSource source, AudioClip clip, float volume)
+    private void SetTruckDepartureProgressInternal(float progress)
+    {
+        // SmoothStep makes the truck remain fully present just outside the
+        // gate, then lets the sound recede gradually along the long road.
+        truckDepartureVolumeMultiplier = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(progress));
+
+        if (truckEngineSource != null && truckEngineSource.isPlaying)
+        {
+            truckEngineSource.volume = GetTruckEngineVolume(truckMotion);
+        }
+    }
+
+    private float GetTruckEngineVolume(TruckMotion motion)
+    {
+        var gain = motion == TruckMotion.Reverse ? ReverseEngineGain : ForwardEngineGain;
+        return Mathf.Clamp01(truckEngineVolume * gain * truckDepartureVolumeMultiplier);
+    }
+
+    private static float GetTruckEnginePitch(TruckMotion motion)
+    {
+        return motion == TruckMotion.Reverse ? ReverseEnginePitch : ForwardEnginePitch;
+    }
+
+    private static void PlayLoop(AudioSource source, AudioClip clip, float volume, float pitch = 1f)
     {
         if (source == null || clip == null)
         {
@@ -220,6 +284,7 @@ public sealed class FactoryAudioController : MonoBehaviour
 
         source.clip = clip;
         source.volume = volume;
+        source.pitch = pitch;
         if (!source.isPlaying)
         {
             source.Play();
@@ -324,21 +389,30 @@ public sealed class FactoryAudioController : MonoBehaviour
 
     private static AudioClip CreateTruckEngineClip()
     {
-        const float duration = 2.5f;
+        const float duration = 3.2f;
         var sampleCount = Mathf.CeilToInt(duration * SampleRate);
         var samples = new float[sampleCount];
         for (var index = 0; index < sampleCount; index++)
         {
             var time = index / (float)SampleRate;
-            // A low multi-cylinder rumble with a small combustion knock reads
-            // as a diesel engine, rather than as a smooth petrol tone.
-            var rumble = Mathf.Sin(time * Mathf.PI * 2f * 48f) * 0.48f +
-                         Mathf.Sin(time * Mathf.PI * 2f * 96f) * 0.23f +
-                         Mathf.Sin(time * Mathf.PI * 2f * 144f) * 0.12f +
-                         Mathf.Sin(time * Mathf.PI * 2f * 288f) * 0.055f;
-            var combustion = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(time * Mathf.PI * 2f * 24f)), 7f) * 0.19f;
-            var chassisVibration = Mathf.Sin(time * Mathf.PI * 2f * 6f) * 0.035f;
-            samples[index] = Mathf.Clamp((rumble + combustion + chassisVibration) * 0.45f, -0.62f, 0.62f);
+            // The engine needs a slightly uneven, low-frequency exhaust
+            // character: a smooth sine reads as an electric motor, while
+            // short cylinder bursts make a small work truck sound diesel.
+            const float firingFrequency = 24.5f;
+            var firingPhase = Mathf.Repeat(time * firingFrequency, 1f);
+            var cylinderBurst = Mathf.Exp(-firingPhase * 15f);
+            var rumble = Mathf.Sin(time * Mathf.PI * 2f * 31.5f) * 0.35f +
+                         Mathf.Sin(time * Mathf.PI * 2f * 63f) * 0.20f +
+                         Mathf.Sin(time * Mathf.PI * 2f * 94.5f) * 0.085f;
+            var exhaustChug = Mathf.Sin(time * Mathf.PI * 2f * 54f) * cylinderBurst * 0.34f +
+                             Mathf.Sin(time * Mathf.PI * 2f * 108f) * cylinderBurst * 0.11f;
+            var slowMisfire = Mathf.Sin(time * Mathf.PI * 2f * 1.8f) * 0.04f;
+            var roughness = (Mathf.PerlinNoise(time * 9.7f, 0.41f) * 2f - 1f) *
+                            (0.015f + cylinderBurst * 0.045f);
+            samples[index] = Mathf.Clamp(
+                (rumble + exhaustChug + slowMisfire + roughness) * 0.68f,
+                -0.78f,
+                0.78f);
         }
 
         var clip = AudioClip.Create("Truck_Forward_Engine", sampleCount, 1, SampleRate, false);

@@ -15,6 +15,9 @@ public sealed class ForkliftController : MonoBehaviour
 
     private float lockedHeight;
     private CharacterController collisionController;
+    // The penguin encounter grants a round-local bonus. It is deliberately
+    // kept off LevelProgression, so every new/restarted level begins fairly.
+    private float penguinSpeedMultiplier = 1f;
 
     private void Awake()
     {
@@ -48,7 +51,7 @@ public sealed class ForkliftController : MonoBehaviour
         var direction = new Vector3(input.x, 0f, input.y).normalized;
         TurnFrontToward(direction);
 
-        var movement = direction * (movementSpeed * Time.deltaTime);
+        var movement = direction * (movementSpeed * penguinSpeedMultiplier * Time.deltaTime);
         if (collisionController != null && collisionController.enabled)
         {
             // CharacterController.Move performs a swept collision check, so
@@ -75,5 +78,14 @@ public sealed class ForkliftController : MonoBehaviour
             transform.rotation,
             targetRotation,
             turnSpeedDegreesPerSecond * Time.deltaTime);
+    }
+
+    /// <summary>
+    /// Applies the penguin driver's 10% handling bonus for the remainder of
+    /// this level. It never stacks, even if the encounter is evaluated twice.
+    /// </summary>
+    public void ApplyPenguinSpeedBonus(float multiplier)
+    {
+        penguinSpeedMultiplier = Mathf.Max(penguinSpeedMultiplier, Mathf.Max(1f, multiplier));
     }
 }

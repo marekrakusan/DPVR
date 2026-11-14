@@ -21,6 +21,10 @@ public sealed class ConveyorBoxSpawner : MonoBehaviour
     public float floorHeight = 0.19f;
     public ConveyorDropCoordinator dispatchCoordinator;
 
+    [Header("Discharge layout")]
+    [Tooltip("Which of this conveyor's two physical branches finishes at the lower discharge zone.")]
+    public ConveyorBranch lowerBranch = ConveyorBranch.B;
+
     [Header("Diverter")]
     [Tooltip("The physical flap which opens the selected route.")]
     public ConveyorDiverter diverter;
@@ -116,11 +120,30 @@ public sealed class ConveyorBoxSpawner : MonoBehaviour
     }
 
     /// <summary>
+    /// The shared coordinator may discard a tentative whole-round plan before
+    /// any package is spawned. Reset only the display-number reservation so
+    /// the accepted plan still begins at package one on this conveyor.
+    /// </summary>
+    public void ResetPackageReservations()
+    {
+        packageIndex = 0;
+    }
+
+    /// <summary>
     /// Lets the coordinator evaluate a route before reserving it.
     /// </summary>
     public bool HasValidPath(ConveyorBranch branch)
     {
         return IsValidPath(branch == ConveyorBranch.A ? branchPathA : branchPathB);
+    }
+
+    /// <summary>
+    /// The coordinator uses the authored layout rather than assuming that a
+    /// particular A/B label always means the lower physical conveyor.
+    /// </summary>
+    public bool IsLowerBranch(ConveyorBranch branch)
+    {
+        return branch == lowerBranch;
     }
 
     /// <summary>

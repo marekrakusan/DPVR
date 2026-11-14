@@ -71,6 +71,8 @@ public sealed class DeliveryTruckController : MonoBehaviour
     private float curveDuration;
     private Bounds cargoSideLocalBounds;
     private bool hasCargoSideLocalBounds;
+    private bool gateCloseStarted;
+    private bool levelOutcomeShown;
 
     /// <summary>
     /// The packages are re-parented from the forks to the truck when loading
@@ -85,6 +87,12 @@ public sealed class DeliveryTruckController : MonoBehaviour
     /// then creates a fresh controller and resets the board naturally.
     /// </summary>
     public bool ShouldHoldLoadCounterUntilLevelEnds => LoadedPackageCount > 0;
+
+    /// <summary>
+    /// A screen-pinned counter could otherwise obscure the truck while it
+    /// drives through the gate or manoeuvres in the courtyard.
+    /// </summary>
+    public bool IsCounterPinningSuppressed => state != State.Waiting && state != State.Finished;
 
     private enum State
     {
@@ -265,18 +273,42 @@ public sealed class DeliveryTruckController : MonoBehaviour
                 }
                 break;
             case State.Leaving:
+            {
                 // At yaw 180 the model's local -Z cab points along world +Z,
                 // therefore this is a forward departure through the gate.
-                if (MoveAndRotate(exitPosition, 180f, driveSpeed)) state = State.Closing;
+                var reachedRoadEnd = MoveAndRotate(exitPosition, 180f, driveSpeed);
+                if (reachedRoadEnd)
+                {
+                    // Finish the gradual road fade on the exact frame that
+                    // the truck reaches the outer end of the exit road.
+                    FactoryAudioController.SetTruckDepartureProgress(1f);
+                }
+
+                // Close as soon as the complete visual truck has cleared the
+                // opening, not after it reaches the distant end of the road.
+                // The outcome belongs to that same moment, while the vehicle
+                // continues its visible departure along the exterior road.
+                if (!gateCloseStarted && (HasClearedGateForClosing() || reachedRoadEnd))
+                {
+                    gateCloseStarted = true;
+                    if (!levelOutcomeShown)
+                    {
+                        levelOutcomeShown = true;
+                        outcomeOverlay?.ShowResult(LoadedPackageCount >= outcomeOverlay.requiredLoadedPackages);
+                    }
+                }
+
+                var gateClosed = gateCloseStarted && SetGateOpen(false);
+                if (reachedRoadEnd)
+                {
+                    state = gateClosed ? State.Finished : State.Closing;
+                }
                 break;
+            }
             case State.Closing:
                 if (SetGateOpen(false))
                 {
                     state = State.Finished;
-                    if (outcomeOverlay != null)
-                    {
-                        outcomeOverlay.ShowResult(LoadedPackageCount >= outcomeOverlay.requiredLoadedPackages);
-                    }
                 }
                 break;
         }
@@ -289,6 +321,12 @@ public sealed class DeliveryTruckController : MonoBehaviour
 
     private void UpdateTruckMotionSound()
     {
+        // The engine should fade as the truck recedes along the road, not as
+        // the player zooms the camera. Every other part of the route resets
+        // the multiplier so arriving, reversing and loading remain audible.
+        FactoryAudioController.SetTruckDepartureProgress(
+            state == State.Leaving ? GetOutboundRoadProgress() : 0f);
+
         switch (state)
         {
             case State.EnteringGate:
@@ -307,6 +345,21 @@ public sealed class DeliveryTruckController : MonoBehaviour
         }
     }
 
+    private float GetOutboundRoadProgress()
+    {
+        var roadDirection = exitPosition - gateExitPosition;
+        roadDirection.y = 0f;
+        var roadLengthSquared = roadDirection.sqrMagnitude;
+        if (roadLengthSquared < 0.0001f)
+        {
+            return 1f;
+        }
+
+        var truckOffset = transform.position - gateExitPosition;
+        truckOffset.y = 0f;
+        return Mathf.Clamp01(Vector3.Dot(truckOffset, roadDirection) / roadLengthSquared);
+    }
+
     private bool MoveAndRotate(Vector3 targetPosition, float targetYaw, float speed)
     {
         transform.position = Vector3.MoveTowards(transform.position, targetPosition, speed * Time.deltaTime);
@@ -315,6 +368,43 @@ public sealed class DeliveryTruckController : MonoBehaviour
 
         return Vector3.SqrMagnitude(transform.position - targetPosition) < 0.0001f &&
                Quaternion.Angle(transform.rotation, targetRotation) < 0.1f;
+    }
+
+    private bool HasClearedGateForClosing()
+    {
+        if (truckVisual != null && TryGetActiveRendererBounds(truckVisual, out var visualBounds))
+        {
+            // The vehicle drives towards increasing Z through a gate whose
+            // plane is centred at gateClosedPosition.z. Give the rear a small
+            // physical margin before the gate begins its downward motion.
+            return visualBounds.min.z >= gateClosedPosition.z + 0.25f;
+        }
+
+        // Robust fallback for replacement models without renderers.
+        return transform.position.z >= gateExitPosition.z + 3.5f;
+    }
+
+    private static bool TryGetActiveRendererBounds(Transform root, out Bounds bounds)
+    {
+        bounds = default;
+        var hasBounds = false;
+        if (root == null) return false;
+
+        foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer.enabled || !renderer.gameObject.activeInHierarchy) continue;
+            if (!hasBounds)
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        return hasBounds;
     }
 
     /// <summary>

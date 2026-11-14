@@ -6,6 +6,9 @@ using UnityEngine;
 /// </summary>
 public sealed class ConveyorPackageMover : MonoBehaviour
 {
+    /// <summary>Length of the visible vertical fall after a parcel reaches its end point.</summary>
+    public const float DropDuration = 0.42f;
+
     private Transform[] waypoints;
     private int nextWaypoint;
     private float speed;
@@ -55,7 +58,7 @@ public sealed class ConveyorPackageMover : MonoBehaviour
 
         if (isDropping)
         {
-            dropProgress += Time.deltaTime / 0.42f;
+            dropProgress += Time.deltaTime / DropDuration;
             var target = new Vector3(dropStart.x, groundY, dropStart.z);
             transform.position = Vector3.Lerp(dropStart, target, Mathf.SmoothStep(0f, 1f, dropProgress));
 
